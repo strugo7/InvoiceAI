@@ -1,0 +1,12 @@
+fastapi==0.110.0
+uvicorn==0.28.0
+pydantic==2.6.4
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.122.0
+gspread==6.1.0
+python-multipart==0.0.9
+python-dotenv==1.0.1
+google-genai
+fpdf2
+apscheduler
+python-bidi

@@ -1,0 +1,18 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets — never commit these
+backend/.env
+backend/credentials.json
+backend/token_*.json
+backend/token.json
+
+# Generated files
+backend/reports/
+backend/invoices.json
+
+# macOS
+.DS_Store

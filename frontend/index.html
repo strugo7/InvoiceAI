@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>סוכן AI לניהול חשבוניות ודשבורד פיננסי</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Background glowing orbs for Glassmorphism depth -->
+    <div class="glow-orb orb-purple"></div>
+    <div class="glow-orb orb-blue"></div>
+    <div class="glow-orb orb-cyan"></div>
+
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar-panel">
+            <div class="brand-section">
+                <div class="brand-logo">
+                    <i class="fa-solid fa-brain-circuit brain-glow"></i>
+                </div>
+                <h2>InvoiceAI</h2>
+                <p>סוכן פיננסי חכם</p>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" data-tab="dashboard">
+                    <i class="fa-solid fa-chart-pie"></i>
+                    <span>לוח בקרה</span>
+                </a>
+                <a href="#" class="nav-item" data-tab="invoices">
+                    <i class="fa-solid fa-receipt"></i>
+                    <span>חשבוניות</span>
+                </a>
+                <a href="#" class="nav-item" data-tab="settings">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>הגדרות סוכן</span>
+                </a>
+            </nav>
+            
+            <div class="sidebar-status">
+                <div class="status-indicator">
+                    <span class="status-dot pulsating" id="status-dot"></span>
+                    <span id="status-label">מצב סימולציה</span>
+                </div>
+                <div class="sheet-connection-info" id="sheet-info">
+                    <i class="fa-solid fa-table"></i>
+                    <span>גיליון מקומי בלבד</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="app-header">
+                <div class="header-title">
+                    <h1 id="page-title">לוח בקרה פיננסי</h1>
+                    <p id="page-subtitle">מעקב וניתוח הוצאות שוטפות וחשבוניות חודשיות מ-Gmail</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary btn-sync" id="btn-sync-now">
+                        <i class="fa-solid fa-rotate sync-icon"></i>
+                        <span>סנכרן כעת</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard Tab -->
+            <section class="tab-content active" id="tab-dashboard">
+                <!-- KPI Statistics Row -->
+                <div class="kpi-grid">
+                    <!-- KPI 1 -->
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-icon icon-purple">
+                            <i class="fa-solid fa-wallet"></i>
+                        </div>
+                        <div class="kpi-details">
+                            <h3>הוצאות החודש (₪)</h3>
+                            <p class="kpi-value" id="kpi-monthly-ils">₪0</p>
+                            <span class="kpi-trend trend-down" id="kpi-monthly-trend">
+                                <i class="fa-solid fa-caret-down"></i> ללא שינוי
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- KPI 2 -->
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-icon icon-cyan">
+                            <i class="fa-solid fa-dollar-sign"></i>
+                        </div>
+                        <div class="kpi-details">
+                            <h3>הוצאות החודש ($)</h3>
+                            <p class="kpi-value" id="kpi-monthly-usd">$0</p>
+                            <span class="kpi-trend" id="kpi-usd-details">שירותי ענן ו-SaaS</span>
+                        </div>
+                    </div>
+                    
+                    <!-- KPI 3 -->
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-icon icon-amber">
+                            <i class="fa-solid fa-rotate-right"></i>
+                        </div>
+                        <div class="kpi-details">
+                            <h3>מינויים פעילים</h3>
+                            <p class="kpi-value" id="kpi-active-subs">0</p>
+                            <span class="kpi-trend trend-up" id="kpi-subs-trend">נמצאו בחשבון</span>
+                        </div>
+                    </div>
+                    
+                    <!-- KPI 4 -->
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-icon icon-rose">
+                            <i class="fa-solid fa-crown"></i>
+                        </div>
+                        <div class="kpi-details">
+                            <h3>שירות יקר ביותר</h3>
+                            <p class="kpi-value" id="kpi-expensive-service">-</p>
+                            <span class="kpi-trend" id="kpi-expensive-amount">₪0 / חודש</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Grid -->
+                <div class="charts-grid">
+                    <div class="chart-card glass-panel">
+                        <div class="chart-header">
+                            <h3>מגמת הוצאות חודשית</h3>
+                            <div class="chart-actions">
+                                <span class="chart-legend-dot legend-ils"></span><span>ש"ח (₪)</span>
+                                <span class="chart-legend-dot legend-usd"></span><span>דולר ($)</span>
+                            </div>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="expensesTrendChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <div class="chart-card glass-panel">
+                        <div class="chart-header">
+                            <h3>פילוח לפי קטגוריות</h3>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="categoryDistributionChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activities / Fast View -->
+                <div class="recent-section glass-panel">
+                    <div class="recent-header">
+                        <h3>חשבוניות אחרונות שנסרקו</h3>
+                        <a href="#" class="view-all-link" id="link-view-all">הצג את כל החשבוניות <i class="fa-solid fa-arrow-left"></i></a>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>תאריך</th>
+                                    <th>שם שירות</th>
+                                    <th>קטגוריה</th>
+                                    <th>סכום</th>
+                                    <th>מזהה חשבונית</th>
+                                    <th>פעולות</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-invoices-tbody">
+                                <!-- Dynamic Rows -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Invoices List Tab -->
+            <section class="tab-content" id="tab-invoices">
+                <div class="report-bar glass-panel" style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:12px;flex-wrap:wrap;">
+                    <span style="font-weight:600;font-size:14px;">דוח חודשי:</span>
+                    <input type="month" id="report-month-picker" style="padding:6px 10px;border-radius:8px;border:1px solid #444;background:#1e1e2e;color:#fff;font-size:13px;">
+                    <button id="btn-download-report" class="action-btn" style="padding:7px 16px;border-radius:8px;background:#6c63ff;color:#fff;border:none;cursor:pointer;font-size:13px;">
+                        <i class="fa-solid fa-file-pdf"></i> הורד PDF
+                    </button>
+                    <button id="btn-send-report" class="action-btn" style="padding:7px 16px;border-radius:8px;background:#2ecc71;color:#fff;border:none;cursor:pointer;font-size:13px;">
+                        <i class="fa-solid fa-envelope"></i> שלח במייל
+                    </button>
+                    <span id="report-status" style="font-size:12px;color:#aaa;"></span>
+                </div>
+                <div class="table-filter-bar glass-panel">
+                    <div class="search-box">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="text" id="invoice-search" placeholder="חפש לפי שם שירות, תיאור או חשבונית...">
+                    </div>
+                    <div class="filter-groups">
+                        <button class="filter-btn active" data-category="all">הכל</button>
+                        <button class="filter-btn" data-category="SaaS/Subscription">מינויים (SaaS)</button>
+                        <button class="filter-btn" data-category="Cloud/Hosting">תשתיות ענן</button>
+                        <button class="filter-btn" data-category="Utilities">שירותים ותשלומי בית</button>
+                        <button class="filter-btn" data-category="Entertainment">בידור ופנאי</button>
+                    </div>
+                </div>
+
+                <div class="invoices-list-container glass-panel">
+                    <div class="table-wrapper">
+                        <table class="data-table" id="full-invoices-table">
+                            <thead>
+                                <tr>
+                                    <th class="sortable" data-sort="date">תאריך <i class="fa-solid fa-sort"></i></th>
+                                    <th class="sortable" data-sort="service_name">שם שירות <i class="fa-solid fa-sort"></i></th>
+                                    <th>קטגוריה</th>
+                                    <th class="sortable" data-sort="amount">סכום <i class="fa-solid fa-sort"></i></th>
+                                    <th>תיאור הודעה</th>
+                                    <th>מזהה חשבונית</th>
+                                    <th>פעולות</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoices-tbody">
+                                <!-- Dynamic Rows -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination-container" id="pagination-ctrl">
+                        <!-- Dynamic pagination buttons -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section class="tab-content" id="tab-settings">
+                <div class="settings-grid">
+                    <div class="settings-card glass-panel">
+                        <div class="settings-header">
+                            <i class="fa-solid fa-sliders settings-icon"></i>
+                            <div>
+                                <h3>תצורת עבודה והרשאות</h3>
+                                <p>נהל את מקור הנתונים ומצבי הריצה של הסוכן</p>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-body">
+                            <div class="form-group">
+                                <label class="toggle-switch-container">
+                                    <span class="toggle-label-text">
+                                        <strong>מצב סימולציה (Simulation Mode)</strong>
+                                        <p class="helper-text">מדמה סריקת Gmail וחלוקת מידע של חשבוניות לדוגמה ללא צורך בהתחברות ל-API של Google.</p>
+                                    </span>
+                                    <input type="checkbox" id="setting-use-mock" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="form-group sheet-id-group" id="sheet-id-container">
+                                <label for="setting-sheet-id">
+                                    <strong>מזהה Google Spreadsheet ID</strong>
+                                    <p class="helper-text">קובץ ה-Google Sheet בו ישמרו כל החשבוניות המנותחות. ניתן למצוא את המזהה בכתובת ה-URL של הגיליון.</p>
+                                </label>
+                                <div class="input-with-icon">
+                                    <i class="fa-solid fa-table-list"></i>
+                                    <input type="text" id="setting-sheet-id" placeholder="לדוגמה: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ...">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <button class="btn btn-primary" id="btn-save-settings">
+                                    <i class="fa-solid fa-floppy-disk"></i>
+                                    <span>שמור הגדרות</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Connected Accounts Card -->
+                    <div class="settings-card glass-panel" id="connected-accounts-card" style="display: none; margin-top: 2rem; grid-column: span 1;">
+                        <div class="settings-header">
+                            <i class="fa-solid fa-envelope-open-text settings-icon"></i>
+                            <div>
+                                <h3>חשבונות Gmail מחוברים (OAuth 2.0)</h3>
+                                <p>נהל את תיבות המייל שהסוכן יסרוק במצב אמת</p>
+                            </div>
+                        </div>
+                        <div class="settings-body">
+                            <div id="accounts-list-container" class="accounts-list" style="display: flex; flex-direction: column; gap: 0.8rem; margin-bottom: 1.2rem;">
+                                <!-- Dynamic accounts list -->
+                                <p class="helper-text" style="text-align: center; padding: 1rem;">אין חשבונות מחוברים עדיין.</p>
+                            </div>
+                            <div class="form-group" id="connect-btn-group">
+                                <button class="btn btn-primary" id="btn-connect-account" style="background: linear-gradient(135deg, var(--cyan) 0%, var(--primary) 100%); width: 100%; justify-content: center;">
+                                    <i class="fa-brands fa-google"></i>
+                                    <span>חבר חשבון Gmail חדש</span>
+                                </button>
+                                <p class="helper-text">לחיצה תפעיל את תהליך ה-OAuth המאובטח של גוגל לאישור חשבון נוסף (קריאה בלבד).</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-card glass-panel help-card">
+                        <div class="settings-header">
+                            <i class="fa-solid fa-circle-question settings-icon"></i>
+                            <div>
+                                <h3>מדריך חיבור Gmail ו-Google Sheets</h3>
+                                <p>כיצד לעבור ממצב סימולציה למצב אמת</p>
+                            </div>
+                        </div>
+                        <div class="settings-body help-body">
+                            <ol class="help-steps">
+                                <li>
+                                    <strong>הגדרת פרויקט Google Cloud:</strong>
+                                    <p>כנס ל-Google Cloud Console, צור פרויקט חדש והפעל את ה-Gmail API וה-Google Sheets API.</p>
+                                </li>
+                                <li>
+                                    <strong>יצירת אישורי גישה (OAuth Client):</strong>
+                                    <p>הגדר מסך הסכמה (Consent Screen), צור מפתח מסוג Desktop App והורד אותו בשם <code>credentials.json</code>.</p>
+                                </li>
+                                <li>
+                                    <strong>מיקום הקובץ:</strong>
+                                    <p>העבר את קובץ ה-<code>credentials.json</code> לתיקיית ה-<code>backend</code> של הפרויקט.</p>
+                                </li>
+                                <li>
+                                    <strong>יצירת גיליון Google Sheets:</strong>
+                                    <p>צור גיליון חדש ב-Google Sheets והעתק את המזהה שלו מה-URL (התווים בין <code>/d/</code> ל-<code>/edit</code>) לשדה ההגדרות משמאל.</p>
+                                </li>
+                                <li>
+                                    <strong>סנכרון ראשון:</strong>
+                                    <p>כבה את מצב הסימולציה, לחץ על "שמור הגדרות", ואז לחץ על "סנכרן כעת". ייפתח חלון דפדפן לאישור הגישה לחשבונך באופן מאובטח!</p>
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Invoice Details Modal -->
+    <div class="modal-backdrop" id="invoice-modal">
+        <div class="modal-card glass-panel">
+            <button class="modal-close" id="btn-close-modal">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <div class="modal-header">
+                <span class="category-badge" id="modal-category">קטגוריה</span>
+                <h2 id="modal-service-name">שם השירות</h2>
+                <p id="modal-invoice-id">חשבונית מס׳ </p>
+            </div>
+            <div class="modal-body">
+                <div class="modal-info-grid">
+                    <div class="info-item">
+                        <span class="info-label">תאריך תשלום</span>
+                        <span class="info-value" id="modal-date">01-01-2026</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">סכום ששולם</span>
+                        <span class="info-value text-glow" id="modal-amount">₪0.00</span>
+                    </div>
+                </div>
+                
+                <div class="info-section">
+                    <h3>תיאור החשבונית</h3>
+                    <p class="description-box" id="modal-description">אין פירוט זמין.</p>
+                </div>
+                
+                <div class="info-section">
+                    <h3>נושא המייל המקורי</h3>
+                    <p class="email-subject-box" id="modal-email-subject">נושא המייל המקורי...</p>
+                </div>
+
+                <div class="modal-auditor-note">
+                    <i class="fa-solid fa-shield-halved"></i>
+                    <div>
+                        <strong>הערת ביקורת AI של Gemini</strong>
+                        <p>המידע חולץ באופן אוטומטי מתוך תיבת ה-Gmail והוזן לגיליון ה-Spreadsheet באופן מאובטח.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Custom Script -->
+    <script src="app.js"></script>
+</body>
+</html>
