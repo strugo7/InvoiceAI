@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>סוכן AI לניהול חשבוניות ודשבורד פיננסי</title>
-    
+    <title>InvoiceAI — סוכן פיננסי חכם</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='fg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237C5CFC'/%3E%3Cstop offset='100%25' stop-color='%232DD4F0'/%3E%3C/linearGradient%3E%3ClinearGradient id='fb' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='white' stop-opacity='0'/%3E%3Cstop offset='50%25' stop-color='white' stop-opacity='1'/%3E%3Cstop offset='100%25' stop-color='white' stop-opacity='0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23fg)'/%3E%3Crect x='18' y='12' width='28' height='32' rx='3' fill='white'/%3E%3Cline x1='22' y1='20' x2='38' y2='20' stroke='%235B3FE4' stroke-width='2' stroke-linecap='round' opacity='0.6'/%3E%3Cline x1='22' y1='26' x2='42' y2='26' stroke='%235B3FE4' stroke-width='2' stroke-linecap='round' opacity='0.6'/%3E%3Cline x1='22' y1='32' x2='34' y2='32' stroke='%235B3FE4' stroke-width='2' stroke-linecap='round' opacity='0.6'/%3E%3Crect x='10' y='43' width='44' height='3' rx='1.5' fill='url(%23fb)'/%3E%3Ccircle cx='32' cy='54' r='7' fill='white'/%3E%3Ctext x='32' y='58' text-anchor='middle' font-family='Inter,system-ui,sans-serif' font-weight='800' font-size='11' fill='%235B3FE4'%3E%24%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='fg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237C5CFC'/%3E%3Cstop offset='100%25' stop-color='%232DD4F0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23fg)'/%3E%3Crect x='18' y='12' width='28' height='32' rx='3' fill='white'/%3E%3Ccircle cx='32' cy='54' r='7' fill='white'/%3E%3Ctext x='32' y='58' text-anchor='middle' font-family='Inter,system-ui,sans-serif' font-weight='800' font-size='11' fill='%235B3FE4'%3E%24%3C/text%3E%3C/svg%3E">
+
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,7 +34,46 @@
         <aside class="sidebar-panel">
             <div class="brand-section">
                 <div class="brand-logo">
-                    <i class="fa-solid fa-brain-circuit brain-glow"></i>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="64" height="64" fill="none" style="filter:drop-shadow(0 0 18px rgba(124,92,252,0.55))">
+                      <rect x="8" y="8" width="184" height="184" rx="48" fill="#0A0E1A"/>
+                      <defs>
+                        <radialGradient id="sb-glow" cx="0.5" cy="0.5" r="0.5">
+                          <stop offset="0%" stop-color="#7C5CFC" stop-opacity="0.5"/>
+                          <stop offset="100%" stop-color="#7C5CFC" stop-opacity="0"/>
+                        </radialGradient>
+                        <linearGradient id="sb-brand" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0%" stop-color="#7C5CFC"/>
+                          <stop offset="100%" stop-color="#2DD4F0"/>
+                        </linearGradient>
+                        <linearGradient id="sb-beam" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stop-color="#7C5CFC" stop-opacity="0"/>
+                          <stop offset="50%" stop-color="#2DD4F0" stop-opacity="1"/>
+                          <stop offset="100%" stop-color="#7C5CFC" stop-opacity="0"/>
+                        </linearGradient>
+                        <filter id="sb-bloom"><feGaussianBlur stdDeviation="3"/></filter>
+                      </defs>
+                      <rect x="8" y="8" width="184" height="184" rx="48" fill="url(#sb-glow)" opacity="0.55"/>
+                      <!-- document -->
+                      <g transform="translate(60 38)">
+                        <rect width="80" height="104" rx="8" fill="white"/>
+                        <g stroke="#0A0E1A" stroke-width="4" stroke-linecap="round" opacity="0.5">
+                          <line x1="12" y1="20" x2="52" y2="20"/>
+                          <line x1="12" y1="34" x2="68" y2="34"/>
+                          <line x1="12" y1="48" x2="44" y2="48"/>
+                          <line x1="12" y1="62" x2="60" y2="62"/>
+                        </g>
+                      </g>
+                      <!-- beam -->
+                      <rect x="40" y="138" width="120" height="6" rx="3" fill="url(#sb-beam)" filter="url(#sb-bloom)"/>
+                      <rect x="40" y="139" width="120" height="3" rx="1.5" fill="white" opacity="0.9"/>
+                      <!-- $ extracted -->
+                      <circle cx="80" cy="158" r="4" fill="#2DD4F0" opacity="0.5"/>
+                      <circle cx="120" cy="160" r="5" fill="#2DD4F0" opacity="0.7"/>
+                      <g transform="translate(100 170)">
+                        <circle r="14" fill="url(#sb-brand)"/>
+                        <text y="6" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-weight="800" font-size="18" fill="white">$</text>
+                      </g>
+                    </svg>
                 </div>
                 <h2>InvoiceAI</h2>
                 <p>סוכן פיננסי חכם</p>
@@ -48,6 +91,14 @@
                 <a href="#" class="nav-item" data-tab="settings">
                     <i class="fa-solid fa-sliders"></i>
                     <span>הגדרות סוכן</span>
+                </a>
+                <a href="/logo.html" class="nav-item" target="_blank" style="margin-top:8px;opacity:0.6;font-size:12px;">
+                    <i class="fa-solid fa-palette"></i>
+                    <span>לוגו ומיתוג</span>
+                </a>
+                <a href="/admin.html" class="nav-item" target="_blank" style="opacity:0.6;font-size:12px;">
+                    <i class="fa-solid fa-sitemap"></i>
+                    <span>Admin — ארכיטקטורה</span>
                 </a>
             </nav>
             
