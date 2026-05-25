@@ -1,5 +1,33 @@
 # InvoiceAI — Changelog
 
+## Session 2026-05-25
+
+---
+
+### ✨ New Features
+
+#### Supabase PostgreSQL Integration
+- Replaced `invoices.json` as primary storage with a **Supabase PostgreSQL** cloud database.
+- Created project `gmail-invoice-tracker` in region `eu-central-1` (Frankfurt).
+- Schema: `public.invoices` table with columns: `id`, `email_id` (unique), `service_name`, `date`, `amount`, `currency`, `category`, `invoice_id`, `description`, `email_subject`, `scanned_account`, `created_at`.
+- Unique index on `email_id` prevents double-importing the same Gmail message at DB level.
+- RLS enabled; `anon`/`authenticated` roles explicitly revoked — backend uses `service_role` key only.
+- New `_get_supabase()` helper in `GmailInvoiceAgent` returns an authenticated Supabase client (or `None` if not configured).
+- `_load_cached_invoices()` reads from Supabase first, falls back to `invoices.json` if unavailable.
+- `_save_cached_invoices()` upserts to Supabase on `email_id` conflict, and always writes `invoices.json` as local backup.
+- Mock mode still uses `invoices.json` only — no mock data is written to the cloud DB.
+- **New dependency:** `supabase` added to `requirements.txt`.
+- **New env vars:** `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` in `backend/.env`.
+
+#### Gmail Scan Improvements
+- Extended lookback window from **30 days → 90 days** (3 months).
+- Added `in:anywhere` to Gmail search query — now scans Inbox, Promotions, Updates, Sent, and all user labels.
+- Expanded subject keywords: added `payment`, `order`, `הזמנה`.
+- Increased `maxResults` from 15 → 500 per API call.
+- Added **full pagination** via `nextPageToken` loop — fetches all matching messages, not just the first page.
+
+---
+
 ## Session 2026-05-24
 
 ---

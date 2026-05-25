@@ -165,8 +165,34 @@ class GmailInvoiceAgent:
         self.use_mock = use_mock
         self.sheet_id = sheet_id
         
+    def _get_supabase(self):
+        """Returns an authenticated Supabase client, or None if not configured."""
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+        if not url or not key or key == "YOUR_SERVICE_ROLE_KEY_HERE":
+            return None
+        try:
+            from supabase import create_client
+            return create_client(url, key)
+        except Exception as e:
+            logging.warning(f"Could not create Supabase client: {e}")
+            return None
+
     def _load_cached_invoices(self) -> List[Dict[str, Any]]:
-        """Loads locally cached invoices from the JSON file."""
+        """Loads invoices from Supabase, falling back to the local JSON cache."""
+        sb = self._get_supabase()
+        if sb:
+            try:
+                resp = sb.table("invoices").select("*").order("date", desc=True).execute()
+                rows = resp.data or []
+                # Normalise: rename 'email_id' → 'id' so the rest of the code is unchanged
+                for r in rows:
+                    r["id"] = r.pop("email_id", r.get("id", ""))
+                logging.info(f"Loaded {len(rows)} invoices from Supabase.")
+                return rows
+            except Exception as e:
+                logging.warning(f"Supabase load failed, falling back to local cache: {e}")
+
         if os.path.exists(CACHE_FILE):
             try:
                 with open(CACHE_FILE, "r", encoding="utf-8") as f:
@@ -176,12 +202,36 @@ class GmailInvoiceAgent:
         return []
 
     def _save_cached_invoices(self, invoices: List[Dict[str, Any]]):
-        """Saves invoices to the local JSON file cache."""
+        """Upserts invoices into Supabase and writes the local JSON backup."""
+        sb = self._get_supabase()
+        if sb and invoices:
+            try:
+                rows = []
+                for inv in invoices:
+                    row = {
+                        "email_id":       inv.get("id", ""),
+                        "service_name":   inv.get("service_name", ""),
+                        "date":           inv.get("date", ""),
+                        "amount":         inv.get("amount", 0.0),
+                        "currency":       inv.get("currency", ""),
+                        "category":       inv.get("category", ""),
+                        "invoice_id":     inv.get("invoice_id"),
+                        "description":    inv.get("description"),
+                        "email_subject":  inv.get("email_subject"),
+                        "scanned_account": inv.get("scanned_account", "simulation"),
+                    }
+                    rows.append(row)
+                sb.table("invoices").upsert(rows, on_conflict="email_id").execute()
+                logging.info(f"Upserted {len(rows)} invoices to Supabase.")
+            except Exception as e:
+                logging.error(f"Supabase upsert failed: {e}")
+
+        # Always keep local JSON as backup
         try:
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(invoices, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logging.error(f"Error saving cached invoices: {e}")
+            logging.error(f"Error saving local invoice cache: {e}")
 
     async def scan_and_process(self) -> Dict[str, Any]:
         """Runs the main scanning and processing cycle."""
@@ -349,13 +399,31 @@ class GmailInvoiceAgent:
                 
         service = build('gmail', 'v1', credentials=creds)
         
-        # Search query for last 30 days
-        query = "subject:(invoice OR receipt OR bill OR חשבונית OR קבלה OR תשלום) newer_than:30d"
+        # Search across ALL labels (Inbox, Promotions, Updates, Sent, etc.) for the past year
+        query = (
+            "in:anywhere "
+            "subject:(invoice OR receipt OR bill OR payment OR order OR חשבונית OR קבלה OR תשלום OR הזמנה) "
+            "newer_than:90d"
+        )
         logging.info(f"Querying Gmail API at token '{os.path.basename(token_path)}' with: {query}")
-        
-        results = service.users().messages().list(userId='me', q=query, maxResults=15).execute()
-        messages = results.get('messages', [])
-        
+
+        # Paginate through all results (Gmail returns up to 500 per page)
+        messages = []
+        page_token = None
+        while True:
+            kwargs = {"userId": "me", "q": query, "maxResults": 500}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            results = service.users().messages().list(**kwargs).execute()
+            page_messages = results.get("messages", [])
+            messages.extend(page_messages)
+            page_token = results.get("nextPageToken")
+            logging.info(f"  Fetched {len(page_messages)} message IDs (total so far: {len(messages)})")
+            if not page_token:
+                break
+
+        logging.info(f"Total messages to process for '{os.path.basename(token_path)}': {len(messages)}")
+
         email_records = []
         for msg in messages:
             msg_id = msg['id']

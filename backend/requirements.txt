@@ -10,3 +10,4 @@ google-genai
 fpdf2
 apscheduler
 python-bidi
+supabase

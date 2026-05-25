@@ -42,6 +42,25 @@ uvicorn server:app --reload --port 8000
 
 ---
 
+## 🗄️ הגדרת Supabase (Database Setup)
+
+המערכת משתמשת ב-Supabase כמסד נתונים ענן ראשי. הנתונים נשמרים בטבלת `invoices` ב-PostgreSQL.
+
+### 1. הוספת מפתחות Supabase ל-`.env`
+```
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_KEY=<service_role key from Supabase dashboard>
+```
+ניתן למצוא את המפתחות תחת: **Supabase Dashboard → Settings → API**.
+
+> [!NOTE]
+> השתמש במפתח `service_role` (לא `anon`) — השרת פועל בצד-שרת בלבד ולא חשוף לדפדפן.
+
+### 2. פרויקט Supabase
+פרויקט הפרודקשן: `gmail-invoice-tracker` — אזור `eu-central-1` (פרנקפורט).
+
+---
+
 ## ⚙️ מעבר למצב אמת (Production Mode)
 
 כדי שהסוכן יסרוק את תיבת ה-Gmail האמיתית שלך ויכתוב לגליון Google Sheets שלך, עקוב אחר הצעדים הבאים:
@@ -79,4 +98,4 @@ uvicorn server:app --reload --port 8000
 * **AI Agent**: Google Antigravity SDK ומודל Gemini - סוכן בינה מלאכותית חכם המעבד את התוכן של המיילים, מסווג ומחלץ קבלות בעזרת Pydantic Structured Output.
 * **Frontend**: HTML5 / Vanilla CSS3 / Modern JavaScript (ES6) - ממשק המעוצב בעיצוב **Glassmorphic Dark Mode** מרהיב, הכולל סינון, חיפוש, חלוקת עמודים (Pagination) וחלונות מודאל מפורטים.
 * **Charts**: Chart.js - ספריה להצגת גרפים דינמיים מותאמים אישית (מגמות חודשיות ופילוח קטגוריות).
-* **Database**: Google Sheets (באמצעות `gspread`) עם גיבוי וזכרון מטמון מקומי (`invoices.json`).
+* **Database**: **Supabase (PostgreSQL)** — ענן ראשי לאחסון חשבוניות, עם גיבוי מקומי ב-`invoices.json`. Google Sheets נשמר כאפשרות סנכרון נוספת.
