@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, List
 
 from contextlib import asynccontextmanager
 
-from agent import GmailInvoiceAgent, CACHE_FILE, get_connected_accounts, disconnect_account, connect_new_gmail_account
+from agent import GmailInvoiceAgent, get_connected_accounts, disconnect_account, connect_new_gmail_account
 from fastapi.responses import FileResponse
 from report_generator import generate_monthly_pdf, load_invoices_for_month
 from mailer import send_report_email
@@ -43,7 +43,7 @@ app.add_middleware(
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
 class SettingsModel(BaseModel):
-    use_mock: bool = True
+    use_mock: bool = False
     sheet_id: Optional[str] = ""
 
 def load_config() -> Dict[str, Any]:
@@ -56,7 +56,7 @@ def load_config() -> Dict[str, Any]:
             logging.error(f"Error loading config: {e}")
     
     # Default config
-    default_config = {"use_mock": True, "sheet_id": ""}
+    default_config = {"use_mock": False, "sheet_id": ""}
     save_config(default_config)
     return default_config
 
@@ -85,28 +85,54 @@ def update_settings(settings: SettingsModel):
 
 @app.get("/api/invoices")
 def get_invoices():
-    """Retrieve all parsed/cached invoices."""
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return {"status": "success", "data": data}
-        except Exception as e:
-            logging.error(f"Error reading cache file: {e}")
-            raise HTTPException(status_code=500, detail=f"Error reading invoice cache: {str(e)}")
-    
-    # If no cache exists, return empty list or run mock generator to show something by default
-    logging.info("No invoice cache found. Generating initial mock data for first-time dashboard load.")
-    from agent import generate_mock_invoices
-    mock_data = generate_mock_invoices()
-    
+    """
+    Retrieve all invoices for the dashboard. Supabase is the source of truth
+    (falling back to the local JSON cache). Never fabricates mock data — an empty
+    database returns an empty list so the dashboard only ever shows real records.
+    """
+    from agent import load_all_invoices
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(mock_data, f, ensure_ascii=False, indent=2)
+        data = load_all_invoices()
+        return {"status": "success", "data": data}
     except Exception as e:
-        logging.error(f"Error writing initial cache: {e}")
-        
-    return {"status": "success", "data": mock_data}
+        logging.error(f"Error reading invoices: {e}")
+        raise HTTPException(status_code=500, detail=f"Error reading invoices: {str(e)}")
+
+
+@app.get("/api/invoices/{email_id}/document")
+def get_invoice_document_endpoint(email_id: str, account: str):
+    """
+    Classify how an invoice can be viewed. Returns JSON:
+      {"type": "pdf"}                                  -> stream via the /pdf route
+      {"type": "page", "html": "...", "link": url|null} -> render email body + optional hosted link
+      {"type": "none"}                                 -> nothing renderable
+    """
+    from agent import get_invoice_document
+    return get_invoice_document(email_id, account)
+
+
+@app.get("/api/invoices/{email_id}/pdf")
+def get_invoice_pdf_endpoint(email_id: str, account: str):
+    """
+    Stream the original invoice PDF for a given Gmail message, fetched on demand
+    from the user's mailbox. `account` is the scanned Gmail address (validated
+    against connected accounts inside the agent). Served inline so the browser
+    displays it without downloading.
+    """
+    from agent import get_invoice_pdf
+    from urllib.parse import quote
+    result = get_invoice_pdf(email_id, account)
+    if not result:
+        raise HTTPException(status_code=404, detail="PDF not found for this invoice")
+    pdf_bytes, filename = result
+    # HTTP headers are latin-1 only; encode non-ASCII (e.g. Hebrew) filenames per RFC 5987
+    ascii_name = filename.encode("ascii", "ignore").decode() or "invoice.pdf"
+    disposition = f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @app.post("/api/sync")

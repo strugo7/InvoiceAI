@@ -406,6 +406,10 @@
                 <p id="modal-invoice-id">חשבונית מס׳ </p>
             </div>
             <div class="modal-body">
+                <button class="btn-view-invoice" id="modal-view-invoice">
+                    <i class="fa-solid fa-file-pdf"></i>
+                    <span>צפה בחשבונית המקורית</span>
+                </button>
                 <div class="modal-info-grid">
                     <div class="info-item">
                         <span class="info-label">תאריך תשלום</span>
@@ -414,6 +418,10 @@
                     <div class="info-item">
                         <span class="info-label">סכום ששולם</span>
                         <span class="info-value text-glow" id="modal-amount">₪0.00</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">תדירות חיוב</span>
+                        <span class="info-value" id="modal-subscription-period">חודשי</span>
                     </div>
                 </div>
                 
@@ -433,6 +441,37 @@
                         <strong>הערת ביקורת AI של Gemini</strong>
                         <p>המידע חולץ באופן אוטומטי מתוך תיבת ה-Gmail והוזן לגיליון ה-Spreadsheet באופן מאובטח.</p>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Viewer Modal -->
+    <div class="modal-backdrop" id="pdf-modal">
+        <div class="pdf-modal-card glass-panel">
+            <div class="pdf-modal-header">
+                <h2 id="pdf-modal-title">חשבונית</h2>
+                <div class="pdf-header-actions">
+                    <a href="#" target="_blank" rel="noopener" class="btn-pdf-external" id="pdf-external-link" style="display:none">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> צפה בחשבונית באתר
+                    </a>
+                    <button class="modal-close" id="btn-close-pdf-modal">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="pdf-modal-body">
+                <div class="pdf-loading" id="pdf-loading">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                    <span>טוען את החשבונית...</span>
+                </div>
+                <iframe id="pdf-frame" title="חשבונית מקורית"></iframe>
+                <div class="pdf-fallback" id="pdf-fallback">
+                    <i class="fa-solid fa-file-circle-xmark"></i>
+                    <p id="pdf-fallback-text">המסמך אינו זמין לצפייה ישירה.</p>
+                    <a href="#" target="_blank" rel="noopener" class="btn-primary" id="pdf-gmail-link">
+                        <i class="fa-brands fa-google"></i> פתח את המייל ב-Gmail
+                    </a>
                 </div>
             </div>
         </div>

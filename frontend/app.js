@@ -396,58 +396,67 @@ function calculateKPIs() {
     
     invoices.forEach(inv => {
         const invDate = new Date(inv.date);
-        
-        // Count overall unique active subs in the last 45 days
+        const period = inv.subscription_period || 'monthly';
+
+        // Count active subscriptions: annual subs use 400-day window, monthly use 45 days
         const diffDays = Math.ceil(Math.abs(new Date() - invDate) / (1000 * 60 * 60 * 24));
-        if (diffDays <= 45) {
+        const activeWindow = period === 'annual' ? 400 : 45;
+        if (diffDays <= activeWindow) {
             monthlyServiceSet.add(inv.service_name);
         }
-        
-        // Sum current month
+
+        // Sum current month — amortize annual invoices to their monthly equivalent
         if (invDate.getMonth() === currentMonth && invDate.getFullYear() === currentYear) {
+            const effectiveAmount = period === 'annual' ? inv.amount / 12 : inv.amount;
             if (inv.currency === "ILS") {
-                totalILS += inv.amount;
+                totalILS += effectiveAmount;
             } else if (inv.currency === "USD") {
-                totalUSD += inv.amount;
+                totalUSD += effectiveAmount;
             }
         }
     });
-    
+
     // Set KPI Values
     document.getElementById("kpi-monthly-ils").textContent = `₪${totalILS.toLocaleString('he-IL', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     document.getElementById("kpi-monthly-usd").textContent = `$${totalUSD.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     document.getElementById("kpi-active-subs").textContent = monthlyServiceSet.size;
-    
-    // 2. Find Expensive Service
+
+    // 2. Find Expensive Service (amortize annual to monthly for fair comparison)
     let serviceExpenses = {};
     invoices.forEach(inv => {
         const name = inv.service_name;
-        // Normalize amounts to ILS for comparison (estimate $1 = 3.7 NIS)
-        const amtInILS = inv.currency === "USD" ? inv.amount * 3.7 : inv.amount;
-        
+        const period = inv.subscription_period || 'monthly';
+        const monthlyAmount = period === 'annual' ? inv.amount / 12 : inv.amount;
+        const amtInILS = inv.currency === "USD" ? monthlyAmount * 3.7 : monthlyAmount;
+
         if (!serviceExpenses[name]) {
-            serviceExpenses[name] = { total: 0, raw: inv.amount, curr: inv.currency };
+            serviceExpenses[name] = { total: 0, monthlyRaw: monthlyAmount, curr: inv.currency, period };
         }
         serviceExpenses[name].total += amtInILS;
     });
-    
+
     let mostExpensive = "-";
     let maxAmt = 0;
     let maxRaw = 0;
     let maxCurr = "₪";
-    
+    let maxPeriod = "monthly";
+
     for (let key in serviceExpenses) {
         if (serviceExpenses[key].total > maxAmt) {
             maxAmt = serviceExpenses[key].total;
             mostExpensive = key;
-            maxRaw = serviceExpenses[key].raw;
+            maxRaw = serviceExpenses[key].monthlyRaw;
             maxCurr = serviceExpenses[key].curr;
+            maxPeriod = serviceExpenses[key].period;
         }
     }
-    
+
     document.getElementById("kpi-expensive-service").textContent = mostExpensive;
     const currSym = maxCurr === "USD" ? "$" : "₪";
-    document.getElementById("kpi-expensive-amount").textContent = `${currSym}${maxRaw.toFixed(2)} / חודש`;
+    const periodLabel = maxPeriod === 'annual'
+        ? `${currSym}${(maxRaw * 12).toFixed(2)} / שנה (≈${currSym}${maxRaw.toFixed(2)} / חודש)`
+        : `${currSym}${maxRaw.toFixed(2)} / חודש`;
+    document.getElementById("kpi-expensive-amount").textContent = periodLabel;
 }
 
 // 4. Synchronization Action
@@ -494,20 +503,22 @@ function renderCharts() {
     const invoices = appState.invoices;
     
     // Group invoices by Month for Trend
-    // Formats dates as YYYY-MM
+    // Formats dates as YYYY-MM — amortize annual invoices to monthly equivalent
     let monthlyData = {};
     invoices.forEach(inv => {
         if (!inv.date) return;
         const monthKey = inv.date.substring(0, 7); // "2026-05"
-        
+        const period = inv.subscription_period || 'monthly';
+        const effectiveAmount = period === 'annual' ? inv.amount / 12 : inv.amount;
+
         if (!monthlyData[monthKey]) {
             monthlyData[monthKey] = { ILS: 0, USD: 0 };
         }
-        
+
         if (inv.currency === "ILS") {
-            monthlyData[monthKey].ILS += inv.amount;
+            monthlyData[monthKey].ILS += effectiveAmount;
         } else if (inv.currency === "USD") {
-            monthlyData[monthKey].USD += inv.amount;
+            monthlyData[monthKey].USD += effectiveAmount;
         }
     });
     
@@ -692,23 +703,33 @@ function createInvoiceRow(inv) {
     else if (inv.category === "Utilities") catClass = "cat-utilities";
     else if (inv.category === "Entertainment") catClass = "cat-entertainment";
     
+    const periodBadge = (inv.subscription_period === 'annual')
+        ? `<span class="period-badge period-annual">שנתי</span>` : '';
+
     tr.innerHTML = `
         <td class="date-cell">${dateFormatted}</td>
-        <td class="service-name-cell">${inv.service_name}</td>
+        <td class="service-name-cell">${periodBadge}${inv.service_name}</td>
         <td><span class="category-pill ${catClass}">${translateCategory(inv.category)}</span></td>
         <td class="amount-cell">${amtStr} <span class="currency-badge ${currClass}">${inv.currency}</span></td>
         <td class="invoice-id-cell">${inv.invoice_id || '-'}</td>
         <td>
+            <button class="btn-icon btn-view-pdf" data-id="${inv.id || ''}" title="צפה בחשבונית המקורית">
+                <i class="fa-solid fa-file-pdf"></i>
+            </button>
             <button class="btn-icon btn-view-details" data-id="${inv.id || ''}">
                 <i class="fa-solid fa-magnifying-glass-chart"></i>
             </button>
         </td>
     `;
-    
+
+
     tr.querySelector(".btn-view-details").addEventListener("click", () => {
         showInvoiceDetailsModal(inv);
     });
-    
+    tr.querySelector(".btn-view-pdf").addEventListener("click", () => {
+        showInvoicePdf(inv);
+    });
+
     return tr;
 }
 
@@ -832,24 +853,33 @@ function renderFullInvoicesTable() {
         else if (inv.category === "Utilities") catClass = "cat-utilities";
         else if (inv.category === "Entertainment") catClass = "cat-entertainment";
         
+        const invPeriodBadge = (inv.subscription_period === 'annual')
+            ? `<span class="period-badge period-annual">שנתי</span>` : '';
+
         tr.innerHTML = `
             <td class="date-cell">${dateFormatted}</td>
-            <td class="service-name-cell">${inv.service_name}</td>
+            <td class="service-name-cell">${invPeriodBadge}${inv.service_name}</td>
             <td><span class="category-pill ${catClass}">${translateCategory(inv.category)}</span></td>
             <td class="amount-cell">${currSymbol}${inv.amount.toFixed(2)} <span class="currency-badge ${currClass}">${inv.currency}</span></td>
             <td style="color: var(--text-secondary); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${inv.description || '-'}</td>
             <td class="invoice-id-cell">${inv.invoice_id || '-'}</td>
             <td>
+                <button class="btn-icon btn-view-pdf" data-id="${inv.id}" title="צפה בחשבונית המקורית">
+                    <i class="fa-solid fa-file-pdf"></i>
+                </button>
                 <button class="btn-icon btn-view-details" data-id="${inv.id}">
                     <i class="fa-solid fa-magnifying-glass-chart"></i>
                 </button>
             </td>
         `;
-        
+
         tr.querySelector(".btn-view-details").addEventListener("click", () => {
             showInvoiceDetailsModal(inv);
         });
-        
+        tr.querySelector(".btn-view-pdf").addEventListener("click", () => {
+            showInvoicePdf(inv);
+        });
+
         tbody.appendChild(tr);
     });
     
@@ -913,17 +943,123 @@ function renderPagination(totalPages) {
 function setupModalActions() {
     const modal = document.getElementById("invoice-modal");
     const closeBtn = document.getElementById("btn-close-modal");
-    
+
     closeBtn.addEventListener("click", () => {
         modal.classList.remove("show");
     });
-    
+
     // Close on click outside card
     modal.addEventListener("click", (e) => {
         if (e.target === modal) {
             modal.classList.remove("show");
         }
     });
+
+    // PDF viewer modal
+    const pdfModal = document.getElementById("pdf-modal");
+    const pdfCloseBtn = document.getElementById("btn-close-pdf-modal");
+    pdfCloseBtn.addEventListener("click", closePdfModal);
+    pdfModal.addEventListener("click", (e) => {
+        if (e.target === pdfModal) closePdfModal();
+    });
+}
+
+function closePdfModal() {
+    const pdfModal = document.getElementById("pdf-modal");
+    const frame = document.getElementById("pdf-frame");
+    pdfModal.classList.remove("show");
+    // Release the blob URL and clear the iframe so nothing keeps rendering in the background
+    if (frame.dataset.blobUrl) {
+        URL.revokeObjectURL(frame.dataset.blobUrl);
+        delete frame.dataset.blobUrl;
+    }
+    frame.removeAttribute("srcdoc");
+    frame.src = "about:blank";
+    document.getElementById("pdf-external-link").style.display = "none";
+}
+
+// Opens the document modal and shows the original invoice — a PDF attachment when present,
+// otherwise the email body itself (with a hosted-invoice link surfaced when one is detected).
+async function showInvoicePdf(inv) {
+    const pdfModal = document.getElementById("pdf-modal");
+    const frame = document.getElementById("pdf-frame");
+    const loading = document.getElementById("pdf-loading");
+    const fallback = document.getElementById("pdf-fallback");
+    const fallbackText = document.getElementById("pdf-fallback-text");
+    const gmailLink = document.getElementById("pdf-gmail-link");
+    const externalLink = document.getElementById("pdf-external-link");
+
+    document.getElementById("pdf-modal-title").textContent = inv.service_name || "חשבונית";
+
+    // Reset state
+    frame.style.display = "none";
+    frame.removeAttribute("srcdoc");
+    frame.src = "about:blank";
+    fallback.style.display = "none";
+    externalLink.style.display = "none";
+    loading.style.display = "flex";
+    pdfModal.classList.add("show");
+
+    gmailLink.href = `https://mail.google.com/mail/u/0/#all/${inv.id}`;
+
+    const showFallback = (msg) => {
+        loading.style.display = "none";
+        frame.style.display = "none";
+        fallbackText.textContent = msg;
+        fallback.style.display = "flex";
+    };
+
+    if (!inv.scanned_account || inv.scanned_account === "simulation") {
+        showFallback("אין מסמך זמין במצב הדגמה.");
+        return;
+    }
+
+    const acct = encodeURIComponent(inv.scanned_account);
+    const id = encodeURIComponent(inv.id);
+
+    try {
+        const docRes = await fetch(`/api/invoices/${id}/document?account=${acct}`);
+        const doc = docRes.ok ? await docRes.json() : { type: "none" };
+
+        if (doc.type === "pdf") {
+            // Stream the PDF attachment and embed it
+            const res = await fetch(`/api/invoices/${id}/pdf?account=${acct}`);
+            const contentType = res.headers.get("content-type") || "";
+            if (!res.ok || !contentType.includes("application/pdf")) {
+                showFallback("לא ניתן לטעון את קובץ ה-PDF.");
+                return;
+            }
+            const blobUrl = URL.createObjectURL(await res.blob());
+            frame.dataset.blobUrl = blobUrl;
+            frame.removeAttribute("sandbox"); // browser PDF viewer needs no sandbox
+            frame.src = blobUrl;
+            loading.style.display = "none";
+            frame.style.display = "block";
+        } else if (doc.type === "page") {
+            // Surface a hosted invoice link (opens in a new tab) when one was detected
+            if (doc.link) {
+                externalLink.href = doc.link;
+                externalLink.style.display = "inline-flex";
+            }
+            if (doc.html) {
+                // Render the email body itself, sandboxed (no scripts) for safety
+                frame.setAttribute("sandbox", "");
+                frame.srcdoc = doc.html;
+                loading.style.display = "none";
+                frame.style.display = "block";
+            } else if (doc.link) {
+                // Link only, nothing to embed — point the user to the external page
+                showFallback("החשבונית מתארחת בעמוד חיצוני. פתח אותה בכפתור שלמעלה.");
+            } else {
+                showFallback("לא נמצא תוכן להצגה.");
+            }
+        } else {
+            showFallback("לא נמצא מסמך חשבונית זמין להצגה.");
+        }
+    } catch (err) {
+        console.error("Failed to load invoice document:", err);
+        showFallback("אירעה שגיאה בטעינת החשבונית.");
+    }
 }
 
 function showInvoiceDetailsModal(inv) {
@@ -950,7 +1086,13 @@ function showInvoiceDetailsModal(inv) {
     
     document.getElementById("modal-description").textContent = inv.description || "אין תיאור מורחב.";
     document.getElementById("modal-email-subject").textContent = inv.email_subject || "נושא מייל סימולטיבי";
-    
+    document.getElementById("modal-subscription-period").textContent =
+        (inv.subscription_period === 'annual') ? 'שנתי (Annual)' : 'חודשי (Monthly)';
+
+    // Wire the "view original invoice" button (re-bound each open to the current invoice)
+    const viewBtn = document.getElementById("modal-view-invoice");
+    viewBtn.onclick = () => showInvoicePdf(inv);
+
     modal.classList.add("show");
 }
 

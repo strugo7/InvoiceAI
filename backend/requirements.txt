@@ -8,6 +8,7 @@ python-multipart==0.0.9
 python-dotenv==1.0.1
 google-genai
 fpdf2
+pdfplumber==0.11.4
 apscheduler
 python-bidi
 supabase

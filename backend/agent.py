@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import asyncio
@@ -22,6 +23,33 @@ class InvoiceDetail(pydantic.BaseModel):
     category: str = pydantic.Field(description="The category of the expense: 'SaaS/Subscription', 'Cloud/Hosting', 'Utilities', 'Marketing', 'Entertainment', or 'Other'.")
     invoice_id: Optional[str] = pydantic.Field(None, description="The invoice number or transaction ID, if found.")
     description: Optional[str] = pydantic.Field(None, description="A brief description of what was purchased (e.g., 'API Usage', 'Premium Plan').")
+    subscription_period: str = pydantic.Field(
+        "monthly",
+        description="Billing frequency: 'monthly' or 'annual'. "
+                    "Set to 'annual' when the invoice contains: annual, yearly, שנתי, "
+                    "per year, 1-year, 12-month, חיוב שנתי, מנוי שנתי. "
+                    "Default to 'monthly' when uncertain."
+    )
+    is_invoice: bool = pydantic.Field(
+        False,
+        description="TRUE only if this email/PDF is a REAL invoice, receipt, or bill documenting "
+                    "an ACTUAL charge that was made or is due. Set FALSE for marketing emails, "
+                    "promotions, order confirmations without a charge, shipping notifications, "
+                    "newsletters, price quotes, account statements with no amount, or anything where "
+                    "you are guessing the amount. When in doubt, set FALSE."
+    )
+    confidence: float = pydantic.Field(
+        0.0,
+        description="Your confidence from 0.0 to 1.0 that the extracted amount and service_name are "
+                    "CORRECT and taken verbatim from the source text. Use a LOW value (<0.7) if you "
+                    "had to infer, estimate, or guess any field. Never inflate this value."
+    )
+    source_quote: str = pydantic.Field(
+        "",
+        description="The EXACT substring from the email/PDF text where you found the total amount "
+                    "(e.g. 'Total: $19.00' or 'סה\"כ לתשלום: 104 ₪'). Must be copied verbatim from the "
+                    "input. Leave EMPTY if you cannot find the amount as literal text — never invent it."
+    )
 
 class InvoiceExtractionList(pydantic.BaseModel):
     invoices: List[InvoiceDetail]
@@ -48,27 +76,33 @@ def generate_mock_invoices() -> List[Dict[str, Any]]:
         {"name": "Electric Bill", "category": "Utilities", "amount_range": (250.0, 450.0), "currency": "ILS", "desc": "Bi-monthly electric utility bill"},
         {"name": "Internet Service", "category": "Utilities", "amount_range": (99.0, 110.0), "currency": "ILS", "desc": "Fiber Optic 1Gbps"},
         {"name": "Zoom", "category": "SaaS/Subscription", "amount_range": (15.99, 15.99), "currency": "USD", "desc": "Pro Meeting Plan"},
-        {"name": "Figma", "category": "SaaS/Subscription", "amount_range": (15.0, 30.0), "currency": "USD", "desc": "Professional Design Editor Team"}
+        {"name": "Figma", "category": "SaaS/Subscription", "amount_range": (15.0, 30.0), "currency": "USD", "desc": "Professional Design Editor Team"},
+        {"name": "PlayStation Network", "category": "Entertainment", "amount_range": (269.0, 269.0), "currency": "ILS", "desc": "PlayStation Plus Premium - מנוי שנתי", "subscription_period": "annual"},
+        {"name": "Fucsee", "category": "SaaS/Subscription", "amount_range": (99.0, 99.0), "currency": "USD", "desc": "Annual Subscription", "subscription_period": "annual"},
     ]
-    
+
+    # Annual services are billed once a year — add them once to the mock data (not per-month)
+    annual_services = [svc for svc in services if svc.get("subscription_period") == "annual"]
+    monthly_services = [svc for svc in services if svc.get("subscription_period") != "annual"]
+
     mock_data = []
     # Generate for the past 3 months
     for month_offset in range(3, -1, -1):
         target_month = today - timedelta(days=30 * month_offset)
-        
+
         # Pick 5-8 random bills per month
         import random
         random.seed(42 + month_offset) # Determistic but varied
-        
-        selected_services = random.sample(services, k=random.randint(6, 9))
+
+        selected_services = random.sample(monthly_services, k=random.randint(6, min(9, len(monthly_services))))
         for idx, svc in enumerate(selected_services):
             # Calculate a random date in that month
             day = random.randint(1, 28)
             date_str = datetime(target_month.year, target_month.month, day).strftime("%Y-%m-%d")
-            
+
             amount = round(random.uniform(svc["amount_range"][0], svc["amount_range"][1]), 2)
             invoice_id = f"INV-{target_month.year}{target_month.month:02d}-{idx:04d}"
-            
+
             mock_data.append({
                 "id": f"msg-mock-{target_month.year}-{target_month.month}-{idx}",
                 "service_name": svc["name"],
@@ -78,8 +112,25 @@ def generate_mock_invoices() -> List[Dict[str, Any]]:
                 "category": svc["category"],
                 "invoice_id": invoice_id,
                 "description": svc["desc"],
-                "email_subject": f"Your monthly invoice for {svc['name']}"
+                "email_subject": f"Your monthly invoice for {svc['name']}",
+                "subscription_period": svc.get("subscription_period", "monthly"),
             })
+
+    # Add annual subscriptions once (billed ~12 months ago from today)
+    for idx, svc in enumerate(annual_services):
+        annual_date = (today - timedelta(days=random.randint(30, 60))).strftime("%Y-%m-%d")
+        mock_data.append({
+            "id": f"msg-mock-annual-{idx}",
+            "service_name": svc["name"],
+            "date": annual_date,
+            "amount": svc["amount_range"][0],
+            "currency": svc["currency"],
+            "category": svc["category"],
+            "invoice_id": f"ANN-{today.year}-{idx:04d}",
+            "description": svc["desc"],
+            "email_subject": f"Annual subscription renewal - {svc['name']}",
+            "subscription_period": "annual",
+        })
             
     # Sort by date descending
     mock_data.sort(key=lambda x: x["date"], reverse=True)
@@ -102,6 +153,182 @@ def get_connected_accounts() -> List[str]:
         emails.append("default_legacy")
         
     return emails
+
+
+def _build_gmail_service(token_path: str):
+    """Builds an authenticated Gmail API service from a token file, refreshing if needed."""
+    from googleapiclient.discovery import build
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
+
+    if not os.path.exists(token_path):
+        raise FileNotFoundError(f"Auth token file '{token_path}' not found.")
+
+    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(token_path, 'w') as token_file:
+            token_file.write(creds.to_json())
+
+    return build('gmail', 'v1', credentials=creds)
+
+
+def _find_pdf_part(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Recursively walks a Gmail message payload and returns the first PDF attachment part."""
+    mime = part.get('mimeType', '')
+    is_pdf = mime == 'application/pdf' or (
+        mime == 'application/octet-stream' and part.get('filename', '').lower().endswith('.pdf')
+    )
+    if is_pdf:
+        body = part.get('body', {})
+        if body.get('data') or body.get('attachmentId'):
+            return part
+    for subpart in part.get('parts', []):
+        found = _find_pdf_part(subpart)
+        if found:
+            return found
+    return None
+
+
+def _collect_html_body(part: Dict[str, Any], html_parts: List[str], text_parts: List[str]) -> None:
+    """Recursively gathers decoded text/html (and text/plain) parts of a message."""
+    import base64
+    mime = part.get('mimeType', '')
+    data = part.get('body', {}).get('data')
+    if data and mime in ('text/html', 'text/plain'):
+        try:
+            decoded = base64.urlsafe_b64decode(data.encode('utf-8')).decode('utf-8', errors='ignore')
+            (html_parts if mime == 'text/html' else text_parts).append(decoded)
+        except Exception:
+            pass
+    for sub in part.get('parts', []):
+        _collect_html_body(sub, html_parts, text_parts)
+
+
+def _get_email_html(payload: Dict[str, Any]) -> str:
+    """Returns the email's renderable HTML body (scripts stripped), or a <pre> of plain text."""
+    import re as _re
+    html_parts, text_parts = [], []
+    _collect_html_body(payload, html_parts, text_parts)
+    if html_parts:
+        html = "\n".join(html_parts)
+        # Defense-in-depth: drop scripts before we render the email in a sandboxed iframe
+        html = _re.sub(r'<script[^>]*>.*?</script>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+        return html
+    if text_parts:
+        body = "\n".join(text_parts)
+        return f'<pre style="white-space:pre-wrap;font-family:sans-serif;padding:1rem">{body}</pre>'
+    return ""
+
+
+# Anchor text / href patterns that identify a hosted invoice or receipt link.
+_INV_TEXT_STRONG = re.compile(
+    r'(invoice|receipt|view\s+it\s+in\s+your\s+browser|חשבונית|קבלה|לצפייה|צפייה\s+בחשבונ)', re.IGNORECASE)
+_INV_TEXT_WEAK = re.compile(r'(view|download|generate|הצג|הורד)', re.IGNORECASE)
+_INV_HREF = re.compile(
+    r'(invoice|/receipts?/|onfastspring\.com|stripe\.com/receipts|invoice\.stripe\.com)', re.IGNORECASE)
+_INV_HREF_REJECT = re.compile(
+    r'(unsubscribe|/login|/signin|/sign-in|manage|preferences|privacy|/terms|facebook\.com|'
+    r'twitter\.com|instagram\.com|linkedin\.com|\.(png|jpe?g|gif|svg|css)(\?|$))', re.IGNORECASE)
+_ANCHOR_RE = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r'<[^>]+>')
+
+
+def _find_invoice_link(payload: Dict[str, Any]) -> Optional[str]:
+    """Extracts the most likely hosted invoice/receipt URL from an email's HTML body.
+
+    Scores each anchor by its visible text and href; returns the best match or None.
+    """
+    import re as _re
+    html_parts, _text = [], []
+    _collect_html_body(payload, html_parts, _text)
+    html = "\n".join(html_parts)
+    if not html:
+        return None
+
+    best_url, best_score = None, 0
+    for href, raw_text in _ANCHOR_RE.findall(html):
+        if _INV_HREF_REJECT.search(href):
+            continue
+        text = _re.sub(r'\s+', ' ', _TAG_RE.sub('', raw_text)).strip()
+        score = 0
+        if _INV_TEXT_STRONG.search(text):
+            score += 2
+        elif _INV_TEXT_WEAK.search(text):
+            score += 1
+        if _INV_HREF.search(href):
+            score += 2
+        # Require a meaningful signal (strong text, or weak text backed by an invoice-like href)
+        if score >= 2 and score > best_score:
+            best_url, best_score = href, score
+    return best_url
+
+
+def get_invoice_document(email_id: str, account: str) -> Dict[str, Any]:
+    """Classifies how an invoice can be viewed, fetching the Gmail message once.
+
+    Returns one of:
+      {"type": "pdf"}                       — a PDF attachment is available (stream via /pdf)
+      {"type": "page", "html": ..., "link": url|None}  — render the email body; optional hosted link
+      {"type": "none"}                      — nothing renderable (account unknown, fetch error, empty)
+    """
+    if account not in get_connected_accounts():
+        logging.warning(f"Document request for unknown account '{account}'")
+        return {"type": "none"}
+    token_path = os.path.join(BACKEND_DIR, f"token_{account}.json")
+    try:
+        service = _build_gmail_service(token_path)
+        full_msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
+        payload = full_msg.get('payload', {})
+        if _find_pdf_part(payload):
+            return {"type": "pdf"}
+        html = _get_email_html(payload)
+        link = _find_invoice_link(payload)
+        if html or link:
+            return {"type": "page", "html": html, "link": link}
+        return {"type": "none"}
+    except Exception as e:
+        logging.error(f"Failed to classify invoice document (id={email_id}, account={account}): {e}")
+        return {"type": "none"}
+
+
+def get_invoice_pdf(email_id: str, account: str):
+    """Fetches the PDF attachment of an invoice email from Gmail on demand.
+
+    Returns (pdf_bytes, filename) or None if no PDF is available / on error.
+    The account is validated against connected accounts to avoid path traversal.
+    """
+    import base64
+
+    if account not in get_connected_accounts():
+        logging.warning(f"PDF request for unknown account '{account}'")
+        return None
+
+    token_path = os.path.join(BACKEND_DIR, f"token_{account}.json")
+    try:
+        service = _build_gmail_service(token_path)
+        full_msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
+        payload = full_msg.get('payload', {})
+        pdf_part = _find_pdf_part(payload)
+        if not pdf_part:
+            return None
+
+        body = pdf_part.get('body', {})
+        if body.get('data'):
+            pdf_bytes = base64.urlsafe_b64decode(body['data'].encode('utf-8'))
+        else:
+            att = service.users().messages().attachments().get(
+                userId='me', messageId=email_id, id=body['attachmentId']
+            ).execute()
+            pdf_bytes = base64.urlsafe_b64decode(att['data'].encode('utf-8'))
+
+        filename = pdf_part.get('filename') or 'invoice.pdf'
+        return pdf_bytes, filename
+    except Exception as e:
+        logging.error(f"Failed to fetch invoice PDF (id={email_id}, account={account}): {e}")
+        return None
 
 
 def disconnect_account(email: str) -> bool:
@@ -158,6 +385,95 @@ async def connect_new_gmail_account() -> str:
     return email_address
 
 
+VALID_CURRENCIES = {"ILS", "USD", "EUR"}
+# Real receipts arrive as PDF attachments from the service. A PDF-backed invoice is
+# trusted at the normal threshold; an inline-only email (the main source of marketing
+# noise and hallucinations) must clear a higher bar before we accept it.
+MIN_CONFIDENCE_PDF = 0.7
+MIN_CONFIDENCE_INLINE = 0.85
+
+
+def _validate_invoice(inv: Dict[str, Any]) -> tuple:
+    """
+    Strict anti-hallucination gate. Returns (is_valid: bool, reason: str).
+    An invoice is only accepted if Gemini flagged it as a real invoice, with a
+    positive amount, a known currency, a verbatim source quote proving the amount
+    was actually present, and confidence above a threshold that is RELAXED when the
+    email carried a PDF receipt and STRICTER when it did not.
+    """
+    if not inv.get("is_invoice", False):
+        return False, "not flagged as a real invoice"
+    try:
+        amount = float(inv.get("amount", 0) or 0)
+    except (TypeError, ValueError):
+        return False, f"non-numeric amount: {inv.get('amount')!r}"
+    if amount <= 0:
+        return False, f"non-positive amount: {amount}"
+    currency = str(inv.get("currency", "")).upper()
+    if currency not in VALID_CURRENCIES:
+        return False, f"invalid currency: {currency!r}"
+    if not str(inv.get("source_quote", "")).strip():
+        return False, "missing source_quote (amount not found verbatim)"
+    if not str(inv.get("service_name", "")).strip():
+        return False, "missing service_name"
+    if not str(inv.get("date", "")).strip():
+        return False, "missing date"
+    try:
+        confidence = float(inv.get("confidence", 0) or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    has_pdf = bool(inv.get("source_has_pdf", False))
+    threshold = MIN_CONFIDENCE_PDF if has_pdf else MIN_CONFIDENCE_INLINE
+    if confidence < threshold:
+        kind = "pdf-backed" if has_pdf else "inline-only"
+        return False, f"low confidence for {kind}: {confidence} < {threshold}"
+    return True, "ok"
+
+
+def load_all_invoices() -> List[Dict[str, Any]]:
+    """
+    Single source of truth for reading invoices for display.
+    Reads from Supabase when configured, falling back to the local JSON cache.
+    Used by both the agent and the /api/invoices endpoint.
+    """
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if url and key and key != "YOUR_SERVICE_ROLE_KEY_HERE":
+        try:
+            from supabase import create_client
+            sb = create_client(url, key)
+            resp = sb.table("invoices").select("*").order("date", desc=True).execute()
+            rows = resp.data or []
+            for r in rows:
+                # Normalise: expose 'email_id' as 'id' so the frontend schema is unchanged
+                r["id"] = r.get("email_id", r.get("id", ""))
+            logging.info(f"Loaded {len(rows)} invoices from Supabase.")
+            return rows
+        except Exception as e:
+            logging.warning(f"Supabase load failed, falling back to local cache: {e}")
+
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Error loading cached invoices: {e}")
+    return []
+
+
+def _extract_pdf_text(pdf_bytes: bytes, max_chars: int = 5000) -> str:
+    """Extracts plain text from a PDF binary using pdfplumber. Returns empty string on failure."""
+    try:
+        import pdfplumber
+        import io
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            texts = [p.extract_text() or "" for p in pdf.pages]
+        return "\n".join(texts)[:max_chars]
+    except Exception as e:
+        logging.warning(f"PDF text extraction failed: {e}")
+        return ""
+
+
 class GmailInvoiceAgent:
     """Agent that processes Gmail accounts and stores invoice details in Google Sheets."""
     
@@ -180,26 +496,7 @@ class GmailInvoiceAgent:
 
     def _load_cached_invoices(self) -> List[Dict[str, Any]]:
         """Loads invoices from Supabase, falling back to the local JSON cache."""
-        sb = self._get_supabase()
-        if sb:
-            try:
-                resp = sb.table("invoices").select("*").order("date", desc=True).execute()
-                rows = resp.data or []
-                # Normalise: rename 'email_id' → 'id' so the rest of the code is unchanged
-                for r in rows:
-                    r["id"] = r.pop("email_id", r.get("id", ""))
-                logging.info(f"Loaded {len(rows)} invoices from Supabase.")
-                return rows
-            except Exception as e:
-                logging.warning(f"Supabase load failed, falling back to local cache: {e}")
-
-        if os.path.exists(CACHE_FILE):
-            try:
-                with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                logging.error(f"Error loading cached invoices: {e}")
-        return []
+        return load_all_invoices()
 
     def _save_cached_invoices(self, invoices: List[Dict[str, Any]]):
         """Upserts invoices into Supabase and writes the local JSON backup."""
@@ -209,16 +506,17 @@ class GmailInvoiceAgent:
                 rows = []
                 for inv in invoices:
                     row = {
-                        "email_id":       inv.get("id", ""),
-                        "service_name":   inv.get("service_name", ""),
-                        "date":           inv.get("date", ""),
-                        "amount":         inv.get("amount", 0.0),
-                        "currency":       inv.get("currency", ""),
-                        "category":       inv.get("category", ""),
-                        "invoice_id":     inv.get("invoice_id"),
-                        "description":    inv.get("description"),
-                        "email_subject":  inv.get("email_subject"),
-                        "scanned_account": inv.get("scanned_account", "simulation"),
+                        "email_id":            inv.get("id", ""),
+                        "service_name":        inv.get("service_name", ""),
+                        "date":                inv.get("date", ""),
+                        "amount":              inv.get("amount", 0.0),
+                        "currency":            inv.get("currency", ""),
+                        "category":            inv.get("category", ""),
+                        "invoice_id":          inv.get("invoice_id"),
+                        "description":         inv.get("description"),
+                        "email_subject":       inv.get("email_subject"),
+                        "scanned_account":     inv.get("scanned_account", "simulation"),
+                        "subscription_period": inv.get("subscription_period", "monthly"),
                     }
                     rows.append(row)
                 sb.table("invoices").upsert(rows, on_conflict="email_id").execute()
@@ -274,7 +572,9 @@ class GmailInvoiceAgent:
                 
             new_invoices_total = []
             cached_data = self._load_cached_invoices()
-            existing_ids = {inv.get("id") for inv in cached_data}
+            # Email-level dedup: strip the per-row "__N" suffix so an already-processed
+            # email (even one that yielded multiple invoices) is recognised and skipped.
+            existing_ids = {str(inv.get("id", "")).split("__")[0] for inv in cached_data}
             
             try:
                 from google import genai
@@ -283,14 +583,26 @@ class GmailInvoiceAgent:
                 SYSTEM_INSTRUCTION = (
                     "You are an expert financial auditor. Analyze the provided email text "
                     "(receipt, invoice, or monthly bill) and extract key financial data. "
-                    "Rules:\n"
-                    "- amount: extract the TOTAL amount as a positive float. Never return 0 unless the invoice truly is free. "
-                    "Look for patterns like '104 ₪', '104.00 ש\"ח', '$19.00', '19.00 USD', 'סה\"כ 104'. "
-                    "If the amount appears with a currency symbol (₪, $, €), strip the symbol and return the number.\n"
+                    "CRITICAL ANTI-HALLUCINATION RULES — accuracy matters more than completeness:\n"
+                    "- NEVER invent, estimate, or guess any value. Every field must come VERBATIM from the input text. "
+                    "If a value is not literally present, do not fabricate it.\n"
+                    "- is_invoice: set TRUE only for a REAL invoice/receipt/bill with an actual charge. Set FALSE for "
+                    "marketing, promotions, order confirmations without a charge, shipping notices, newsletters, price "
+                    "quotes, or statements with no concrete total. When in doubt, FALSE and return an empty invoices list.\n"
+                    "- source_quote: copy the EXACT substring containing the total (e.g. 'Total: $19.00', 'סה\"כ לתשלום: 104 ₪'). "
+                    "If you cannot find the amount as literal text, leave source_quote EMPTY and set is_invoice FALSE.\n"
+                    "- confidence: 0.0-1.0, how sure you are the amount and service_name are exactly correct. Be honest; "
+                    "use <0.7 whenever you had to infer anything.\n"
+                    "- amount: the TOTAL amount as a positive float, taken from source_quote. Strip currency symbols "
+                    "(₪, $, €). Do not return 0.\n"
                     "- currency: ILS for ₪/שח/ש\"ח, USD for $, EUR for €. Use 3-letter ISO codes only.\n"
                     "- date: YYYY-MM-DD format strictly.\n"
-                    "- If multiple invoices appear in the same email, extract all of them.\n"
-                    "- service_name: the company or service name, not the email domain."
+                    "- If multiple genuine invoices appear in the same email, extract all of them.\n"
+                    "- service_name: the company or service name, not the email domain.\n"
+                    "- subscription_period: set to 'annual' if the invoice indicates yearly billing "
+                    "(keywords: annual, yearly, שנתי, per year, 1-year plan, 12-month subscription, "
+                    "חיוב שנתי, מנוי שנתי). Otherwise set to 'monthly'. When unsure, default to 'monthly'. "
+                    "For annual subscriptions, 'amount' is the FULL annual charge — do NOT divide it."
                 )
 
                 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -340,12 +652,36 @@ class GmailInvoiceAgent:
                         try:
                             extracted: InvoiceExtractionList = gemini_response.parsed
                             if extracted and extracted.invoices:
-                                for inv in extracted.invoices:
+                                accepted_in_email = 0
+                                for idx, inv in enumerate(extracted.invoices):
                                     inv_dict = inv.model_dump()
-                                    inv_dict["id"] = msg_id
+                                    # Verification signal: did this email carry a real PDF receipt?
+                                    inv_dict["source_has_pdf"] = mail.get("had_pdf", False)
+
+                                    # Strict validation gate — drop hallucinated / non-invoice data
+                                    is_valid, reason = _validate_invoice(inv_dict)
+                                    if not is_valid:
+                                        logging.info(
+                                            f"REJECTED extraction from '{mail['subject']}': {reason} "
+                                            f"(service={inv_dict.get('service_name')!r}, amount={inv_dict.get('amount')!r})"
+                                        )
+                                        continue
+
+                                    # Unique row id so multi-invoice emails are NOT collapsed in Supabase
+                                    row_id = msg_id if accepted_in_email == 0 else f"{msg_id}__{accepted_in_email}"
+                                    inv_dict["id"] = row_id
                                     inv_dict["email_subject"] = mail["subject"]
                                     inv_dict["scanned_account"] = email
+                                    # Persist whether a PDF receipt was attached so the UI knows
+                                    # whether to surface the "view original invoice" action.
+                                    inv_dict["has_pdf"] = mail.get("had_pdf", False)
+
+                                    # Drop validation-only fields before persisting (keep storage clean)
+                                    for k in ("is_invoice", "confidence", "source_quote", "source_has_pdf"):
+                                        inv_dict.pop(k, None)
+
                                     new_invoices_total.append(inv_dict)
+                                    accepted_in_email += 1
                         except Exception as parse_err:
                             logging.error(f"Error parsing invoice with Gemini: {parse_err}")
                                 
@@ -399,28 +735,36 @@ class GmailInvoiceAgent:
                 
         service = build('gmail', 'v1', credentials=creds)
         
-        # Search across ALL labels (Inbox, Promotions, Updates, Sent, etc.) for the past year
-        query = (
-            "in:anywhere "
-            "subject:(invoice OR receipt OR bill OR payment OR order OR חשבונית OR קבלה OR תשלום OR הזמנה) "
-            "newer_than:90d"
+        # Two queries: (1) subject keyword search with expanded vocabulary, (2) PDF attachments
+        # Combined and deduplicated by message ID to avoid double-processing
+        query_keywords = (
+            "in:anywhere newer_than:400d "
+            "subject:(invoice OR receipt OR bill OR payment OR order OR subscription OR "
+            "חשבונית OR קבלה OR תשלום OR הזמנה OR מנוי OR חשבון OR חשבוניות)"
         )
-        logging.info(f"Querying Gmail API at token '{os.path.basename(token_path)}' with: {query}")
+        query_pdf = (
+            "in:anywhere newer_than:400d "
+            "has:attachment filename:pdf"
+        )
 
-        # Paginate through all results (Gmail returns up to 500 per page)
+        seen_ids: set = set()
         messages = []
-        page_token = None
-        while True:
-            kwargs = {"userId": "me", "q": query, "maxResults": 500}
-            if page_token:
-                kwargs["pageToken"] = page_token
-            results = service.users().messages().list(**kwargs).execute()
-            page_messages = results.get("messages", [])
-            messages.extend(page_messages)
-            page_token = results.get("nextPageToken")
-            logging.info(f"  Fetched {len(page_messages)} message IDs (total so far: {len(messages)})")
-            if not page_token:
-                break
+        for query in [query_keywords, query_pdf]:
+            logging.info(f"Querying Gmail API at token '{os.path.basename(token_path)}': {query[:60]}...")
+            page_token = None
+            while True:
+                kwargs = {"userId": "me", "q": query, "maxResults": 500}
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                results = service.users().messages().list(**kwargs).execute()
+                for m in results.get("messages", []):
+                    if m["id"] not in seen_ids:
+                        seen_ids.add(m["id"])
+                        messages.append(m)
+                page_token = results.get("nextPageToken")
+                logging.info(f"  batch fetched (unique total so far: {len(messages)})")
+                if not page_token:
+                    break
 
         logging.info(f"Total messages to process for '{os.path.basename(token_path)}': {len(messages)}")
 
@@ -453,7 +797,7 @@ class GmailInvoiceAgent:
                 text = _re.sub(r'\n{3,}', '\n\n', text)
                 return text.strip()
 
-            def _collect_parts(part, plain_parts, html_parts):
+            def _collect_parts(part, plain_parts, html_parts, pdf_parts):
                 mime = part.get('mimeType', '')
                 if mime == 'text/plain':
                     text = _decode_part(part)
@@ -463,12 +807,20 @@ class GmailInvoiceAgent:
                     text = _decode_part(part)
                     if text:
                         html_parts.append(text)
+                elif mime == 'application/pdf' or (
+                    mime == 'application/octet-stream' and
+                    part.get('filename', '').lower().endswith('.pdf')
+                ):
+                    data = part.get('body', {}).get('data', '') or None
+                    att_id = part.get('body', {}).get('attachmentId')
+                    if data or att_id:
+                        pdf_parts.append({'data': data, 'attachmentId': att_id})
                 for subpart in part.get('parts', []):
-                    _collect_parts(subpart, plain_parts, html_parts)
+                    _collect_parts(subpart, plain_parts, html_parts, pdf_parts)
 
             payload = full_msg.get('payload', {})
-            plain_parts, html_parts = [], []
-            _collect_parts(payload, plain_parts, html_parts)
+            plain_parts, html_parts, pdf_parts = [], [], []
+            _collect_parts(payload, plain_parts, html_parts, pdf_parts)
 
             if plain_parts:
                 body = "\n".join(plain_parts)
@@ -479,6 +831,29 @@ class GmailInvoiceAgent:
             else:
                 body = ""
 
+            # Extract text from PDF attachments and append to body
+            pdf_texts = []
+            for pdf_info in pdf_parts:
+                if pdf_info['data']:
+                    pdf_bytes = base64.urlsafe_b64decode(pdf_info['data'].encode('utf-8'))
+                elif pdf_info['attachmentId']:
+                    try:
+                        att = service.users().messages().attachments().get(
+                            userId='me', messageId=msg_id, id=pdf_info['attachmentId']
+                        ).execute()
+                        pdf_bytes = base64.urlsafe_b64decode(att['data'].encode('utf-8'))
+                    except Exception as att_err:
+                        logging.warning(f"Could not fetch PDF attachment {pdf_info['attachmentId']}: {att_err}")
+                        continue
+                else:
+                    continue
+                extracted = _extract_pdf_text(pdf_bytes)
+                if extracted:
+                    pdf_texts.append(f"\n[PDF Attachment]:\n{extracted}")
+
+            if pdf_texts:
+                body = body + "\n".join(pdf_texts)
+
             body = body[:8000]
             
             email_records.append({
@@ -486,7 +861,10 @@ class GmailInvoiceAgent:
                 "subject": subject,
                 "sender": sender,
                 "date": date_str,
-                "body": body
+                "body": body,
+                # Verification signal: real receipts arrive as PDF attachments from the service.
+                # True only when a PDF was attached AND its text was successfully extracted.
+                "had_pdf": bool(pdf_texts),
             })
             
         return email_records
@@ -524,7 +902,7 @@ class GmailInvoiceAgent:
         existing_values = worksheet.get_all_values()
         
         if not existing_values:
-            headers = ["תאריך", "שם שירות / חברה", "סכום", "מטבע", "קטגוריה", "מזהה חשבונית", "נושא המייל", "פירוט / תיאור", "מזהה מייל", "תיבת מייל נסרקת"]
+            headers = ["תאריך", "שם שירות / חברה", "סכום", "מטבע", "קטגוריה", "מזהה חשבונית", "נושא המייל", "פירוט / תיאור", "מזהה מייל", "תיבת מייל נסרקת", "תקופת מנוי"]
             worksheet.append_row(headers)
             existing_ids = set()
         else:
@@ -546,7 +924,8 @@ class GmailInvoiceAgent:
                 inv.get("email_subject", ""),
                 inv.get("description", ""),
                 msg_id,
-                inv.get("scanned_account", "simulation")
+                inv.get("scanned_account", "simulation"),
+                inv.get("subscription_period", "monthly"),
             ]
             rows_to_append.append(row)
             

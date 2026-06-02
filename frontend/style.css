@@ -616,6 +616,9 @@ body {
 .cat-entertainment { background: rgba(244, 63, 94, 0.1); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.15); }
 .cat-other { background: rgba(255, 255, 255, 0.05); color: #cbd5e1; border: 1px solid rgba(255, 255, 255, 0.1); }
 
+.period-badge { font-size: 0.7rem; padding: 0.15rem 0.45rem; border-radius: 6px; font-weight: 700; margin-right: 0.4rem; vertical-align: middle; display: inline-block; }
+.period-annual { background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25); }
+
 .date-cell {
     font-family: 'Outfit', sans-serif;
     color: var(--text-secondary);
@@ -1052,7 +1055,7 @@ body {
 
 .modal-info-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 1.5rem;
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.05);
@@ -1303,4 +1306,140 @@ body {
 .btn-disconnect:hover {
     color: var(--rose);
     transform: scale(1.15);
+}
+
+/* --- "View original invoice" button inside details modal --- */
+.btn-view-invoice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    width: 100%;
+    margin-bottom: 1.5rem;
+    padding: 0.9rem 1.5rem;
+    border: none;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--cyan) 100%);
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    box-shadow: 0 4px 20px var(--primary-glow);
+    transition: var(--transition-smooth);
+}
+
+.btn-view-invoice:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 26px var(--primary-glow);
+}
+
+.btn-view-pdf:hover {
+    background: var(--rose);
+    box-shadow: 0 0 12px var(--rose-glow);
+}
+
+/* --- PDF viewer modal --- */
+.pdf-modal-card {
+    width: 90vw;
+    height: 90vh;
+    max-width: 1100px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+    transform: scale(0.95);
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.modal-backdrop.show .pdf-modal-card {
+    transform: scale(1);
+}
+
+.pdf-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 1.75rem;
+    border-bottom: 1px solid var(--panel-border);
+    flex-shrink: 0;
+}
+
+.pdf-modal-header h2 {
+    font-size: 1.25rem;
+    margin: 0;
+}
+
+.pdf-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.pdf-modal-header .modal-close {
+    position: static;
+}
+
+.btn-pdf-external {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 1.1rem;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--cyan) 100%);
+    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-decoration: none;
+    box-shadow: 0 4px 16px var(--primary-glow);
+    transition: var(--transition-smooth);
+}
+
+.btn-pdf-external:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 22px var(--primary-glow);
+}
+
+.pdf-modal-body {
+    flex: 1;
+    position: relative;
+    background: rgba(0, 0, 0, 0.2);
+}
+
+#pdf-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: none;
+    background: #fff;
+}
+
+.pdf-loading,
+.pdf-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    color: var(--text-secondary);
+}
+
+.pdf-fallback {
+    display: none;
+    padding: 2rem;
+    text-align: center;
+}
+
+.pdf-loading i,
+.pdf-fallback i {
+    font-size: 2.5rem;
+    color: var(--primary);
+}
+
+.pdf-fallback .btn-primary {
+    margin-top: 0.5rem;
+    text-decoration: none;
 }
