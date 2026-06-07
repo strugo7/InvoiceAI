@@ -1,6 +1,6 @@
 # backend/report_generator.py
 import os
-import json
+import re
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -26,31 +26,26 @@ def _rtl(text: str) -> str:
     return get_display(str(text))
 
 
-def load_invoices_for_month(year: int, month: int) -> List[Dict[str, Any]]:
-    """Return invoices whose date starts with YYYY-MM."""
+def load_invoices_for_month(year: int, month: int, user_email: str) -> List[Dict[str, Any]]:
+    """Return a user's invoices whose date starts with YYYY-MM (read from Supabase)."""
+    from agent import load_all_invoices
     prefix = f"{year:04d}-{month:02d}"
-    if not os.path.exists(CACHE_FILE):
-        return []
-    with open(CACHE_FILE, encoding="utf-8") as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            return []
-    if not isinstance(data, list):
-        return []
+    data = load_all_invoices(user_email)
     return [inv for inv in data if str(inv.get("date", "")).startswith(prefix)]
 
 
-def generate_monthly_pdf(year: int, month: int) -> str:
+def generate_monthly_pdf(year: int, month: int, user_email: str) -> str:
     """
-    Generate a PDF report for the given month.
+    Generate a PDF report for the given month and user.
     Returns the absolute path to the saved PDF file.
     """
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    invoices = load_invoices_for_month(year, month)
+    invoices = load_invoices_for_month(year, month, user_email)
 
     month_name = datetime(year, month, 1).strftime("%B %Y")
-    filename = f"report_{year:04d}_{month:02d}.pdf"
+    # Per-user filename so concurrent reports for different users never collide on disk
+    safe_user = re.sub(r"[^a-zA-Z0-9._-]", "_", user_email or "user")
+    filename = f"report_{safe_user}_{year:04d}_{month:02d}.pdf"
     filepath = os.path.join(REPORTS_DIR, filename)
 
     pdf = FPDF(orientation="L", unit="mm", format="A4")

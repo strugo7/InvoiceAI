@@ -29,7 +29,36 @@
     <div class="glow-orb orb-blue"></div>
     <div class="glow-orb orb-cyan"></div>
 
-    <div class="app-container">
+    <!-- Login screen (shown until the user signs in with Google) -->
+    <div id="login-screen" class="login-screen" style="display:none">
+        <div class="login-card glass-panel">
+            <div class="login-logo">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="72" height="72" fill="none">
+                    <defs>
+                        <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#7C5CFC"/><stop offset="100%" stop-color="#2DD4F0"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="64" height="64" rx="16" fill="url(#lg)"/>
+                    <rect x="18" y="12" width="28" height="32" rx="3" fill="white"/>
+                    <circle cx="32" cy="54" r="7" fill="white"/>
+                    <text x="32" y="58" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-weight="800" font-size="11" fill="#5B3FE4">$</text>
+                </svg>
+            </div>
+            <h1>InvoiceAI</h1>
+            <p>סוכן פיננסי חכם שמנתח את החשבוניות מתיבת ה-Gmail שלך</p>
+            <a href="/api/auth/login" class="btn-google-signin">
+                <i class="fa-brands fa-google"></i>
+                <span>התחבר עם Google</span>
+            </a>
+            <p class="login-note">
+                בהתחברות אתה מאשר לאפליקציה גישת <strong>קריאה בלבד</strong> לתיבת ה-Gmail שלך,
+                לצורך זיהוי חשבוניות. הנתונים שלך פרטיים ונראים רק לך.
+            </p>
+        </div>
+    </div>
+
+    <div class="app-container" id="app-container" style="display:none">
         <!-- Sidebar / Navigation -->
         <aside class="sidebar-panel">
             <div class="brand-section">
@@ -127,6 +156,13 @@
                         <i class="fa-solid fa-rotate sync-icon"></i>
                         <span>סנכרן כעת</span>
                     </button>
+                    <div class="user-chip" id="user-chip" title="המשתמש המחובר">
+                        <img id="user-avatar" class="user-avatar" alt="" referrerpolicy="no-referrer">
+                        <span id="user-name" class="user-name"></span>
+                        <button class="btn-logout" id="btn-logout" title="התנתק">
+                            <i class="fa-solid fa-right-from-bracket"></i>
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -244,9 +280,6 @@
                     <button id="btn-download-report" class="action-btn" style="padding:7px 16px;border-radius:8px;background:#6c63ff;color:#fff;border:none;cursor:pointer;font-size:13px;">
                         <i class="fa-solid fa-file-pdf"></i> הורד PDF
                     </button>
-                    <button id="btn-send-report" class="action-btn" style="padding:7px 16px;border-radius:8px;background:#2ecc71;color:#fff;border:none;cursor:pointer;font-size:13px;">
-                        <i class="fa-solid fa-envelope"></i> שלח במייל
-                    </button>
                     <span id="report-status" style="font-size:12px;color:#aaa;"></span>
                 </div>
                 <div class="table-filter-bar glass-panel">
@@ -312,17 +345,6 @@
                                 </label>
                             </div>
 
-                            <div class="form-group sheet-id-group" id="sheet-id-container">
-                                <label for="setting-sheet-id">
-                                    <strong>מזהה Google Spreadsheet ID</strong>
-                                    <p class="helper-text">קובץ ה-Google Sheet בו ישמרו כל החשבוניות המנותחות. ניתן למצוא את המזהה בכתובת ה-URL של הגיליון.</p>
-                                </label>
-                                <div class="input-with-icon">
-                                    <i class="fa-solid fa-table-list"></i>
-                                    <input type="text" id="setting-sheet-id" placeholder="לדוגמה: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ...">
-                                </div>
-                            </div>
-
                             <div class="form-group">
                                 <button class="btn btn-primary" id="btn-save-settings">
                                     <i class="fa-solid fa-floppy-disk"></i>
@@ -332,59 +354,31 @@
                         </div>
                     </div>
 
-                    <!-- Connected Accounts Card -->
-                    <div class="settings-card glass-panel" id="connected-accounts-card" style="display: none; margin-top: 2rem; grid-column: span 1;">
-                        <div class="settings-header">
-                            <i class="fa-solid fa-envelope-open-text settings-icon"></i>
-                            <div>
-                                <h3>חשבונות Gmail מחוברים (OAuth 2.0)</h3>
-                                <p>נהל את תיבות המייל שהסוכן יסרוק במצב אמת</p>
-                            </div>
-                        </div>
-                        <div class="settings-body">
-                            <div id="accounts-list-container" class="accounts-list" style="display: flex; flex-direction: column; gap: 0.8rem; margin-bottom: 1.2rem;">
-                                <!-- Dynamic accounts list -->
-                                <p class="helper-text" style="text-align: center; padding: 1rem;">אין חשבונות מחוברים עדיין.</p>
-                            </div>
-                            <div class="form-group" id="connect-btn-group">
-                                <button class="btn btn-primary" id="btn-connect-account" style="background: linear-gradient(135deg, var(--cyan) 0%, var(--primary) 100%); width: 100%; justify-content: center;">
-                                    <i class="fa-brands fa-google"></i>
-                                    <span>חבר חשבון Gmail חדש</span>
-                                </button>
-                                <p class="helper-text">לחיצה תפעיל את תהליך ה-OAuth המאובטח של גוגל לאישור חשבון נוסף (קריאה בלבד).</p>
-                            </div>
-                        </div>
-                    </div>
-
                     <div class="settings-card glass-panel help-card">
                         <div class="settings-header">
                             <i class="fa-solid fa-circle-question settings-icon"></i>
                             <div>
-                                <h3>מדריך חיבור Gmail ו-Google Sheets</h3>
-                                <p>כיצד לעבור ממצב סימולציה למצב אמת</p>
+                                <h3>איך זה עובד</h3>
+                                <p>התחברת עם Google — אותה התחברות נותנת לסוכן גישת קריאה לתיבה שלך</p>
                             </div>
                         </div>
                         <div class="settings-body help-body">
                             <ol class="help-steps">
                                 <li>
-                                    <strong>הגדרת פרויקט Google Cloud:</strong>
-                                    <p>כנס ל-Google Cloud Console, צור פרויקט חדש והפעל את ה-Gmail API וה-Google Sheets API.</p>
+                                    <strong>התחברות עם Google:</strong>
+                                    <p>בלחיצה על "התחבר עם Google" אישרת לאפליקציה גישת <strong>קריאה בלבד</strong> לתיבת ה-Gmail שלך. אין צורך בקבצים או הגדרות נוספות.</p>
                                 </li>
                                 <li>
-                                    <strong>יצירת אישורי גישה (OAuth Client):</strong>
-                                    <p>הגדר מסך הסכמה (Consent Screen), צור מפתח מסוג Desktop App והורד אותו בשם <code>credentials.json</code>.</p>
+                                    <strong>סנכרון:</strong>
+                                    <p>לחץ על "סנכרן כעת" כדי שהסוכן יסרוק את התיבה שלך, יזהה חשבוניות ויחלץ מהן את הנתונים באמצעות AI.</p>
                                 </li>
                                 <li>
-                                    <strong>מיקום הקובץ:</strong>
-                                    <p>העבר את קובץ ה-<code>credentials.json</code> לתיקיית ה-<code>backend</code> של הפרויקט.</p>
+                                    <strong>פרטיות:</strong>
+                                    <p>הנתונים שלך מבודדים ופרטיים — כל משתמש רואה אך ורק את החשבוניות מהתיבה שלו.</p>
                                 </li>
                                 <li>
-                                    <strong>יצירת גיליון Google Sheets:</strong>
-                                    <p>צור גיליון חדש ב-Google Sheets והעתק את המזהה שלו מה-URL (התווים בין <code>/d/</code> ל-<code>/edit</code>) לשדה ההגדרות משמאל.</p>
-                                </li>
-                                <li>
-                                    <strong>סנכרון ראשון:</strong>
-                                    <p>כבה את מצב הסימולציה, לחץ על "שמור הגדרות", ואז לחץ על "סנכרן כעת". ייפתח חלון דפדפן לאישור הגישה לחשבונך באופן מאובטח!</p>
+                                    <strong>התנתקות:</strong>
+                                    <p>בכל רגע ניתן להתנתק מהכפתור בראש העמוד. ניתן גם לבטל את הגישה לחלוטין דרך הגדרות חשבון Google שלך.</p>
                                 </li>
                             </ol>
                         </div>

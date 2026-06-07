@@ -1443,3 +1443,118 @@ body {
     margin-top: 0.5rem;
     text-decoration: none;
 }
+
+/* ============================================================
+   Login screen + user session (multi-user Google Sign-In)
+   ============================================================ */
+.login-screen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    z-index: 50;
+}
+
+.login-card {
+    max-width: 440px;
+    width: 100%;
+    text-align: center;
+    padding: 3rem 2.5rem;
+    border-radius: 24px;
+}
+
+.login-logo {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 1.25rem;
+    filter: drop-shadow(0 0 22px var(--primary-glow));
+}
+
+.login-card h1 {
+    font-size: 2rem;
+    margin: 0 0 0.5rem;
+}
+
+.login-card > p {
+    color: var(--text-secondary);
+    margin: 0 0 2rem;
+    line-height: 1.6;
+}
+
+.btn-google-signin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.9rem 1.5rem;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--cyan) 0%, var(--primary) 100%);
+    color: #fff;
+    font-weight: 700;
+    font-size: 1rem;
+    text-decoration: none;
+    box-shadow: 0 8px 28px var(--primary-glow);
+    transition: var(--transition-smooth);
+}
+
+.btn-google-signin:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 34px var(--primary-glow);
+}
+
+.login-note {
+    margin-top: 1.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+}
+
+.user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.3rem 0.5rem 0.3rem 0.75rem;
+    border-radius: 999px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+}
+
+.user-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--panel-border);
+}
+
+.user-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn-logout {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-muted);
+    transition: var(--transition-smooth);
+}
+
+.btn-logout:hover {
+    background: var(--rose-glow);
+    color: var(--rose);
+}

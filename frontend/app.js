@@ -33,18 +33,18 @@ let categoryChart = null;
 
 function setupReportButtons() {
     const downloadBtn = document.getElementById('btn-download-report');
-    const sendBtn = document.getElementById('btn-send-report');
     const statusEl = document.getElementById('report-status');
     const picker = document.getElementById('report-month-picker');
 
-    if (!downloadBtn || !sendBtn) return;
+    if (!downloadBtn) return;
 
     downloadBtn.addEventListener('click', async () => {
         const month = picker.value;
         if (!month) { statusEl.textContent = 'בחר חודש תחילה'; return; }
         statusEl.textContent = 'מייצר דוח...';
         try {
-            const res = await fetch(`/api/reports/monthly?month=${month}`);
+            const res = await fetch(`/api/reports/monthly?month=${month}`, { credentials: "include" });
+            if (res.status === 401) { showLoginScreen(); return; }
             if (!res.ok) {
                 const err = await res.json();
                 statusEl.textContent = `שגיאה: ${err.detail}`;
@@ -62,34 +62,26 @@ function setupReportButtons() {
             statusEl.textContent = 'שגיאה בהורדת הדוח';
         }
     });
-
-    sendBtn.addEventListener('click', async () => {
-        const month = picker.value;
-        if (!month) { statusEl.textContent = 'בחר חודש תחילה'; return; }
-        statusEl.textContent = 'שולח מייל...';
-        sendBtn.disabled = true;
-        try {
-            const res = await fetch(`/api/reports/send?month=${month}`, { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok) { statusEl.textContent = `שגיאה: ${data.detail}`; return; }
-            statusEl.textContent = `נשלח ל-ofekst@ip-com.co.il ✓`;
-        } catch (e) {
-            statusEl.textContent = 'שגיאה בשליחת המייל';
-        } finally {
-            sendBtn.disabled = false;
-        }
-    });
 }
 
 // Initialize Application
 document.addEventListener("DOMContentLoaded", async () => {
+    // Gate the whole app behind Google Sign-In. If not authenticated, show the
+    // login screen and stop — no dashboard, no data fetches.
+    const user = await fetchCurrentUser();
+    if (!user) {
+        showLoginScreen();
+        return;
+    }
+    showApp(user);
+
     setupTabNavigation();
     setupFiltersAndSearch();
     setupSettingsForm();
     setupSyncAction();
     setupModalActions();
-    setupAccountsConnector();
     setupReportButtons();
+    setupLogout();
 
     // Set month picker default to current month
     const picker = document.getElementById('report-month-picker');
@@ -102,6 +94,57 @@ document.addEventListener("DOMContentLoaded", async () => {
     await fetchSettings();
     await fetchInvoices();
 });
+
+// 0. Authentication / session
+async function fetchCurrentUser() {
+    try {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) return await res.json();
+    } catch (e) {
+        console.error("Auth check failed:", e);
+    }
+    return null;
+}
+
+function showLoginScreen() {
+    const login = document.getElementById("login-screen");
+    const app = document.getElementById("app-container");
+    if (login) login.style.display = "flex";
+    if (app) app.style.display = "none";
+}
+
+function showApp(user) {
+    const login = document.getElementById("login-screen");
+    const app = document.getElementById("app-container");
+    if (login) login.style.display = "none";
+    if (app) app.style.display = "flex";
+
+    const nameEl = document.getElementById("user-name");
+    const avatarEl = document.getElementById("user-avatar");
+    if (nameEl) nameEl.textContent = user.name || user.email || "";
+    if (avatarEl) {
+        if (user.picture) {
+            avatarEl.src = user.picture;
+            avatarEl.style.display = "block";
+        } else {
+            avatarEl.style.display = "none";
+        }
+    }
+}
+
+function setupLogout() {
+    const btn = document.getElementById("btn-logout");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+        try {
+            await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+        } catch (e) {
+            console.error("Logout failed:", e);
+        }
+        // Back to the login screen
+        window.location.reload();
+    });
+}
 
 // 1. Tab Navigation
 function setupTabNavigation() {
@@ -137,8 +180,7 @@ function setupTabNavigation() {
                 renderFullInvoicesTable();
             } else if (tabId === "settings") {
                 pageTitle.textContent = "הגדרות סוכן ה-AI";
-                pageSubtitle.textContent = "חיבור תיבת ה-Gmail, קישור גיליון הנתונים והגדרות סריקה";
-                updateAccountsCardVisibility();
+                pageSubtitle.textContent = "מצב הריצה של הסוכן ופרטי החשבון המחובר";
             }
         });
     });
@@ -154,17 +196,15 @@ function setupTabNavigation() {
 // 2. Fetch & Save Settings
 async function fetchSettings() {
     try {
-        const response = await fetch("/api/settings");
+        const response = await fetch("/api/settings", { credentials: "include" });
         if (response.ok) {
             const data = await response.json();
             appState.settings = data;
-            
+
             // Update UI
             document.getElementById("setting-use-mock").checked = data.use_mock;
-            document.getElementById("setting-sheet-id").value = data.sheet_id || "";
-            
+
             updateStatusIndicators();
-            updateAccountsCardVisibility();
         }
     } catch (error) {
         console.error("Error fetching settings:", error);
@@ -172,74 +212,39 @@ async function fetchSettings() {
     }
 }
 
-async function updateStatusIndicators() {
+function updateStatusIndicators() {
     const isMock = appState.settings.use_mock;
-    const sheetId = appState.settings.sheet_id;
-    
+
     if (isMock) {
         statusDot.className = "status-dot pulsating";
         statusDot.style.backgroundColor = "var(--amber)";
         statusLabel.textContent = "מצב סימולציה";
-        sheetInfo.innerHTML = `<i class="fa-solid fa-table"></i> <span>גיליון סימולציה מקומי</span>`;
-        document.getElementById("sheet-id-container").style.opacity = "0.6";
+        sheetInfo.innerHTML = `<i class="fa-solid fa-flask"></i> <span>נתוני דמו</span>`;
     } else {
         statusDot.className = "status-dot active";
         statusDot.style.backgroundColor = "var(--success)";
         statusLabel.textContent = "מצב אמת פעיל";
-        document.getElementById("sheet-id-container").style.opacity = "1";
-        
-        // Fetch accounts dynamically to show count in status panel
-        let accountsText = "אין תיבות מחוברות";
-        try {
-            const res = await fetch("/api/accounts");
-            if (res.ok) {
-                const actData = await res.json();
-                const count = actData.accounts ? actData.accounts.length : 0;
-                if (count > 0) {
-                    accountsText = `${count} תיבות Gmail מחוברות`;
-                }
-            }
-        } catch(err) {
-            console.error("Error fetching accounts count:", err);
-        }
-        
-        if (sheetId) {
-            const shortId = sheetId.substring(0, 8) + "...";
-            sheetInfo.innerHTML = `<i class="fa-solid fa-table-circle-check" style="color: var(--success)"></i> <span>גליון: ${shortId} | ${accountsText}</span>`;
-        } else {
-            sheetInfo.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: var(--amber)"></i> <span>ללא גיליון | ${accountsText}</span>`;
-        }
+        sheetInfo.innerHTML = `<i class="fa-solid fa-envelope-circle-check" style="color: var(--success)"></i> <span>מחובר ל-Gmail</span>`;
     }
 }
 
 function setupSettingsForm() {
-    const toggleMock = document.getElementById("setting-use-mock");
-    toggleMock.addEventListener("change", (e) => {
-        const container = document.getElementById("sheet-id-container");
-        container.style.opacity = e.target.checked ? "0.6" : "1";
-        updateAccountsCardVisibility();
-    });
-
     document.getElementById("btn-save-settings").addEventListener("click", async () => {
         const useMock = document.getElementById("setting-use-mock").checked;
-        const sheetId = document.getElementById("setting-sheet-id").value.trim();
-        
-        const settingsPayload = {
-            use_mock: useMock,
-            sheet_id: sheetId
-        };
-        
+
+        const settingsPayload = { use_mock: useMock };
+
         try {
             const response = await fetch("/api/settings", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                credentials: "include",
                 body: JSON.stringify(settingsPayload)
             });
-            
+
             if (response.ok) {
                 appState.settings = settingsPayload;
                 updateStatusIndicators();
-                updateAccountsCardVisibility();
                 showToast("ההגדרות נשמרו בהצלחה!", "success");
             } else {
                 showToast("נכשלה שמירת ההגדרות", "error");
@@ -251,122 +256,11 @@ function setupSettingsForm() {
     });
 }
 
-// 2.5 Connected Accounts UI Managers
-async function fetchAccounts() {
-    const container = document.getElementById("accounts-list-container");
-    if (!container) return;
-    
-    try {
-        const response = await fetch("/api/accounts");
-        if (response.ok) {
-            const data = await response.json();
-            const accounts = data.accounts || [];
-            
-            if (accounts.length === 0) {
-                container.innerHTML = `<p class="helper-text" style="text-align: center; padding: 1rem;">אין תיבות מייל מחוברות במצב אמת. חבר חשבון חדש מטה!</p>`;
-                return;
-            }
-            
-            container.innerHTML = "";
-            accounts.forEach(email => {
-                const displayName = email === "default_legacy" ? "Legacy account (token.json)" : email;
-                
-                const div = document.createElement("div");
-                div.className = "account-item";
-                div.innerHTML = `
-                    <span class="account-email">${displayName}</span>
-                    <button class="btn-disconnect" data-email="${email}" title="נתק חשבון">
-                        <i class="fa-solid fa-trash-can"></i>
-                    </button>
-                `;
-                
-                div.querySelector(".btn-disconnect").addEventListener("click", () => {
-                    disconnectGmailAccount(email);
-                });
-                
-                container.appendChild(div);
-            });
-        }
-    } catch (error) {
-        console.error("Error fetching accounts:", error);
-        container.innerHTML = `<p class="helper-text" style="text-align: center; padding: 1rem; color: var(--rose);">שגיאה בטעינת החשבונות מהשרת.</p>`;
-    }
-}
-
-async function disconnectGmailAccount(email) {
-    if (!confirm(`האם אתה בטוח שברצונך לנתק את החשבון המאובטח: ${email}?`)) return;
-    
-    try {
-        const response = await fetch(`/api/accounts/${email}`, {
-            method: "DELETE"
-        });
-        
-        if (response.ok) {
-            showToast("החשבון נותק בהצלחה!", "success");
-            await fetchAccounts();
-            updateStatusIndicators();
-        } else {
-            showToast("ניתוק החשבון נכשל", "error");
-        }
-    } catch (error) {
-        console.error("Error disconnecting account:", error);
-        showToast("שגיאה בתקשורת עם השרת", "error");
-    }
-}
-
-function setupAccountsConnector() {
-    const btnConnect = document.getElementById("btn-connect-account");
-    if (!btnConnect) return;
-    
-    btnConnect.addEventListener("click", async () => {
-        if (btnConnect.classList.contains("disabled")) return;
-        
-        btnConnect.classList.add("disabled");
-        btnConnect.querySelector("span").textContent = "מתחבר...";
-        
-        showToast("חלון דפדפן נפתח במחשבך. אנא אשר את הגישה לסוכן בחשבון ה-Gmail שלך...", "info");
-        
-        try {
-            const response = await fetch("/api/accounts/connect", {
-                method: "POST"
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                showToast(`התחברת בהצלחה לחשבון: ${data.email}!`, "success");
-                await fetchAccounts();
-                updateStatusIndicators();
-            } else {
-                const errData = await response.json();
-                showToast(`החיבור נכשל: ${errData.detail || "שגיאה בחיבור"}`, "error");
-            }
-        } catch (error) {
-            console.error("Error connecting account:", error);
-            showToast("שגיאה בתקשורת עם השרת בעת חיבור החשבון", "error");
-        } finally {
-            btnConnect.classList.remove("disabled");
-            btnConnect.querySelector("span").textContent = "חבר חשבון Gmail חדש";
-        }
-    });
-}
-
-function updateAccountsCardVisibility() {
-    const useMock = document.getElementById("setting-use-mock").checked;
-    const card = document.getElementById("connected-accounts-card");
-    if (!card) return;
-    
-    if (useMock) {
-        card.style.display = "none";
-    } else {
-        card.style.display = "block";
-        fetchAccounts();
-    }
-}
-
 // 3. Fetch Invoices & Update Metrics
 async function fetchInvoices() {
     try {
-        const response = await fetch("/api/invoices");
+        const response = await fetch("/api/invoices", { credentials: "include" });
+        if (response.status === 401) { showLoginScreen(); return; }
         if (response.ok) {
             const result = await response.json();
             appState.invoices = result.data || [];
@@ -473,9 +367,11 @@ function setupSyncAction() {
         
         try {
             const response = await fetch("/api/sync", {
-                method: "POST"
+                method: "POST",
+                credentials: "include"
             });
-            
+
+            if (response.status === 401) { showLoginScreen(); return; }
             if (response.ok) {
                 const result = await response.json();
                 
@@ -1014,16 +910,15 @@ async function showInvoicePdf(inv) {
         return;
     }
 
-    const acct = encodeURIComponent(inv.scanned_account);
     const id = encodeURIComponent(inv.id);
 
     try {
-        const docRes = await fetch(`/api/invoices/${id}/document?account=${acct}`);
+        const docRes = await fetch(`/api/invoices/${id}/document`, { credentials: "include" });
         const doc = docRes.ok ? await docRes.json() : { type: "none" };
 
         if (doc.type === "pdf") {
             // Stream the PDF attachment and embed it
-            const res = await fetch(`/api/invoices/${id}/pdf?account=${acct}`);
+            const res = await fetch(`/api/invoices/${id}/pdf`, { credentials: "include" });
             const contentType = res.headers.get("content-type") || "";
             if (!res.ok || !contentType.includes("application/pdf")) {
                 showFallback("לא ניתן לטעון את קובץ ה-PDF.");

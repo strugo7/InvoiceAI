@@ -3,7 +3,6 @@ import re
 import json
 import logging
 import asyncio
-import glob
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import pydantic
@@ -137,41 +136,33 @@ def generate_mock_invoices() -> List[Dict[str, Any]]:
     return mock_data
 
 
-def get_connected_accounts() -> List[str]:
-    """Scans the backend directory and returns a list of connected Gmail addresses."""
-    tokens = glob.glob(os.path.join(BACKEND_DIR, "token_*.json"))
-    emails = []
-    for t in tokens:
-        filename = os.path.basename(t)
-        # Extract email between 'token_' and '.json'
-        email = filename[6:-5]
-        emails.append(email)
-    
-    # Also support legacy token.json as 'legacy_default' if no other token is found
-    legacy_token = os.path.join(BACKEND_DIR, "token.json")
-    if os.path.exists(legacy_token) and not emails:
-        emails.append("default_legacy")
-        
-    return emails
+GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 
-def _build_gmail_service(token_path: str):
-    """Builds an authenticated Gmail API service from a token file, refreshing if needed."""
+def _build_gmail_service_for_user(user_email: str):
+    """
+    Builds an authenticated Gmail API service for a registered user by loading
+    their encrypted refresh token from Supabase (via auth.get_user_refresh_token)
+    and minting a fresh access token. No token files are used.
+    """
     from googleapiclient.discovery import build
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
+    from auth import get_user_refresh_token
 
-    SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
+    refresh_token = get_user_refresh_token(user_email)
+    if not refresh_token:
+        raise FileNotFoundError(f"No stored Google credentials for user '{user_email}'. Please sign in again.")
 
-    if not os.path.exists(token_path):
-        raise FileNotFoundError(f"Auth token file '{token_path}' not found.")
-
-    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        with open(token_path, 'w') as token_file:
-            token_file.write(creds.to_json())
-
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ.get("GOOGLE_CLIENT_ID"),
+        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+        scopes=GMAIL_SCOPES,
+    )
+    creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
 
@@ -266,20 +257,19 @@ def _find_invoice_link(payload: Dict[str, Any]) -> Optional[str]:
     return best_url
 
 
-def get_invoice_document(email_id: str, account: str) -> Dict[str, Any]:
+def get_invoice_document(email_id: str, user_email: str) -> Dict[str, Any]:
     """Classifies how an invoice can be viewed, fetching the Gmail message once.
+
+    `user_email` is the authenticated session user — we only ever read that
+    user's own mailbox, so there is no cross-user exposure.
 
     Returns one of:
       {"type": "pdf"}                       — a PDF attachment is available (stream via /pdf)
       {"type": "page", "html": ..., "link": url|None}  — render the email body; optional hosted link
-      {"type": "none"}                      — nothing renderable (account unknown, fetch error, empty)
+      {"type": "none"}                      — nothing renderable (fetch error, empty)
     """
-    if account not in get_connected_accounts():
-        logging.warning(f"Document request for unknown account '{account}'")
-        return {"type": "none"}
-    token_path = os.path.join(BACKEND_DIR, f"token_{account}.json")
     try:
-        service = _build_gmail_service(token_path)
+        service = _build_gmail_service_for_user(user_email)
         full_msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
         payload = full_msg.get('payload', {})
         if _find_pdf_part(payload):
@@ -290,25 +280,20 @@ def get_invoice_document(email_id: str, account: str) -> Dict[str, Any]:
             return {"type": "page", "html": html, "link": link}
         return {"type": "none"}
     except Exception as e:
-        logging.error(f"Failed to classify invoice document (id={email_id}, account={account}): {e}")
+        logging.error(f"Failed to classify invoice document (id={email_id}, user={user_email}): {e}")
         return {"type": "none"}
 
 
-def get_invoice_pdf(email_id: str, account: str):
+def get_invoice_pdf(email_id: str, user_email: str):
     """Fetches the PDF attachment of an invoice email from Gmail on demand.
 
     Returns (pdf_bytes, filename) or None if no PDF is available / on error.
-    The account is validated against connected accounts to avoid path traversal.
+    `user_email` is the authenticated session user — only their own mailbox is read.
     """
     import base64
 
-    if account not in get_connected_accounts():
-        logging.warning(f"PDF request for unknown account '{account}'")
-        return None
-
-    token_path = os.path.join(BACKEND_DIR, f"token_{account}.json")
     try:
-        service = _build_gmail_service(token_path)
+        service = _build_gmail_service_for_user(user_email)
         full_msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
         payload = full_msg.get('payload', {})
         pdf_part = _find_pdf_part(payload)
@@ -327,62 +312,8 @@ def get_invoice_pdf(email_id: str, account: str):
         filename = pdf_part.get('filename') or 'invoice.pdf'
         return pdf_bytes, filename
     except Exception as e:
-        logging.error(f"Failed to fetch invoice PDF (id={email_id}, account={account}): {e}")
+        logging.error(f"Failed to fetch invoice PDF (id={email_id}, user={user_email}): {e}")
         return None
-
-
-def disconnect_account(email: str) -> bool:
-    """Deletes the token file corresponding to the specified email."""
-    if email == "default_legacy":
-        token_path = os.path.join(BACKEND_DIR, "token.json")
-    else:
-        token_path = os.path.join(BACKEND_DIR, f"token_{email}.json")
-        
-    if os.path.exists(token_path):
-        os.remove(token_path)
-        logging.info(f"Disconnected account and deleted token for: {email}")
-        return True
-    return False
-
-
-async def connect_new_gmail_account() -> str:
-    """Triggers OAuth 2.0 flow to authorize a new Gmail account and saves its token file dynamically."""
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from googleapiclient.discovery import build
-
-    SCOPES = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send',
-        'https://www.googleapis.com/auth/spreadsheets',
-    ]
-    creds_path = os.path.join(BACKEND_DIR, "credentials.json")
-    
-    if not os.path.exists(creds_path):
-        raise FileNotFoundError(
-            "Credentials file 'credentials.json' not found. "
-            "Please upload it to the backend folder before connecting an account."
-        )
-        
-    flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
-    
-    # Run the local server in a separate thread so it doesn't block the asyncio event loop
-    creds = await asyncio.to_thread(flow.run_local_server, port=0, open_browser=True)
-    
-    # Query Gmail API to get the email address of the authenticated user
-    service = build('gmail', 'v1', credentials=creds)
-    profile = service.users().getProfile(userId='me').execute()
-    email_address = profile.get("emailAddress")
-    
-    if not email_address:
-        raise ValueError("Could not retrieve email address from authorized profile.")
-        
-    # Save the token to a dynamic path matching the email address
-    token_path = os.path.join(BACKEND_DIR, f"token_{email_address}.json")
-    with open(token_path, 'w') as token_file:
-        token_file.write(creds.to_json())
-        
-    logging.info(f"Successfully connected new Gmail account: {email_address}")
-    return email_address
 
 
 VALID_CURRENCIES = {"ILS", "USD", "EUR"}
@@ -430,11 +361,12 @@ def _validate_invoice(inv: Dict[str, Any]) -> tuple:
     return True, "ok"
 
 
-def load_all_invoices() -> List[Dict[str, Any]]:
+def load_all_invoices(user_email: str) -> List[Dict[str, Any]]:
     """
-    Single source of truth for reading invoices for display.
-    Reads from Supabase when configured, falling back to the local JSON cache.
-    Used by both the agent and the /api/invoices endpoint.
+    Single source of truth for reading a user's invoices for display.
+    Reads from Supabase, scoped to the given `user_email` so users only ever see
+    their own data. Falls back to the local JSON cache (also filtered) when
+    Supabase is unavailable. Used by both the agent and the /api/invoices endpoint.
     """
     url = os.environ.get("SUPABASE_URL", "")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
@@ -442,12 +374,17 @@ def load_all_invoices() -> List[Dict[str, Any]]:
         try:
             from supabase import create_client
             sb = create_client(url, key)
-            resp = sb.table("invoices").select("*").order("date", desc=True).execute()
+            resp = (
+                sb.table("invoices").select("*")
+                .eq("user_email", user_email)
+                .order("date", desc=True)
+                .execute()
+            )
             rows = resp.data or []
             for r in rows:
                 # Normalise: expose 'email_id' as 'id' so the frontend schema is unchanged
                 r["id"] = r.get("email_id", r.get("id", ""))
-            logging.info(f"Loaded {len(rows)} invoices from Supabase.")
+            logging.info(f"Loaded {len(rows)} invoices from Supabase for {user_email}.")
             return rows
         except Exception as e:
             logging.warning(f"Supabase load failed, falling back to local cache: {e}")
@@ -455,7 +392,8 @@ def load_all_invoices() -> List[Dict[str, Any]]:
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cached = json.load(f)
+            return [inv for inv in cached if inv.get("user_email") == user_email]
         except Exception as e:
             logging.error(f"Error loading cached invoices: {e}")
     return []
@@ -475,12 +413,11 @@ def _extract_pdf_text(pdf_bytes: bytes, max_chars: int = 5000) -> str:
 
 
 class GmailInvoiceAgent:
-    """Agent that processes Gmail accounts and stores invoice details in Google Sheets."""
-    
-    def __init__(self, use_mock: bool = True, sheet_id: Optional[str] = None):
+    """Agent that scans a single user's Gmail mailbox and stores their invoices."""
+
+    def __init__(self, use_mock: bool = True):
         self.use_mock = use_mock
-        self.sheet_id = sheet_id
-        
+
     def _get_supabase(self):
         """Returns an authenticated Supabase client, or None if not configured."""
         url = os.environ.get("SUPABASE_URL", "")
@@ -494,18 +431,22 @@ class GmailInvoiceAgent:
             logging.warning(f"Could not create Supabase client: {e}")
             return None
 
-    def _load_cached_invoices(self) -> List[Dict[str, Any]]:
-        """Loads invoices from Supabase, falling back to the local JSON cache."""
-        return load_all_invoices()
+    def _load_cached_invoices(self, user_email: str) -> List[Dict[str, Any]]:
+        """Loads the given user's invoices from Supabase (falling back to local cache)."""
+        return load_all_invoices(user_email)
 
-    def _save_cached_invoices(self, invoices: List[Dict[str, Any]]):
-        """Upserts invoices into Supabase and writes the local JSON backup."""
+    def _save_cached_invoices(self, invoices: List[Dict[str, Any]], user_email: str):
+        """
+        Upserts a user's invoices into Supabase, tagged with `user_email` so data
+        stays isolated per user. The unique key is the composite (user_email, email_id).
+        """
         sb = self._get_supabase()
         if sb and invoices:
             try:
                 rows = []
                 for inv in invoices:
                     row = {
+                        "user_email":          user_email,
                         "email_id":            inv.get("id", ""),
                         "service_name":        inv.get("service_name", ""),
                         "date":                inv.get("date", ""),
@@ -515,41 +456,29 @@ class GmailInvoiceAgent:
                         "invoice_id":          inv.get("invoice_id"),
                         "description":         inv.get("description"),
                         "email_subject":       inv.get("email_subject"),
-                        "scanned_account":     inv.get("scanned_account", "simulation"),
+                        "scanned_account":     inv.get("scanned_account", user_email),
                         "subscription_period": inv.get("subscription_period", "monthly"),
                     }
                     rows.append(row)
-                sb.table("invoices").upsert(rows, on_conflict="email_id").execute()
-                logging.info(f"Upserted {len(rows)} invoices to Supabase.")
+                sb.table("invoices").upsert(rows, on_conflict="user_email,email_id").execute()
+                logging.info(f"Upserted {len(rows)} invoices to Supabase for {user_email}.")
             except Exception as e:
                 logging.error(f"Supabase upsert failed: {e}")
 
-        # Always keep local JSON as backup
-        try:
-            with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(invoices, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logging.error(f"Error saving local invoice cache: {e}")
-
-    async def scan_and_process(self) -> Dict[str, Any]:
-        """Runs the main scanning and processing cycle."""
+    async def scan_and_process(self, user_email: str) -> Dict[str, Any]:
+        """Runs the scanning and processing cycle for a single signed-in user."""
         if self.use_mock:
             logging.info("Running Gmail Invoice Agent in SIMULATION (MOCK) mode...")
             await asyncio.sleep(2.5) # Simulate AI processing time
-            
-            # Retrieve or generate mock data
+
+            # Retrieve or generate mock data, tagged to the current user
             mock_invoices = generate_mock_invoices()
-            
-            # Save to local cache
-            self._save_cached_invoices(mock_invoices)
-            
-            # If sheet ID is provided, try to write to Google Sheets too
-            if self.sheet_id:
-                try:
-                    self._write_to_google_sheet(mock_invoices, token_path=None)
-                except Exception as e:
-                    logging.warning(f"Could not write mock data to Google Sheets: {e}. Keeping local cache.")
-                    
+            for inv in mock_invoices:
+                inv["scanned_account"] = user_email
+
+            # Persist (scoped to this user)
+            self._save_cached_invoices(mock_invoices, user_email)
+
             return {
                 "status": "success",
                 "mode": "simulation",
@@ -557,25 +486,16 @@ class GmailInvoiceAgent:
                 "message": f"Successfully simulated scan. {len(mock_invoices)} mock invoices generated and stored.",
                 "data": mock_invoices
             }
-            
+
         else:
-            logging.info("Running Gmail Invoice Agent in PRODUCTION mode...")
-            
-            # Get list of all dynamic tokens to scan
-            connected_emails = get_connected_accounts()
-            if not connected_emails:
-                return {
-                    "status": "error",
-                    "mode": "production",
-                    "message": "No Gmail accounts connected. Please connect at least one account in Settings."
-                }
-                
+            logging.info(f"Running Gmail Invoice Agent in PRODUCTION mode for {user_email}...")
+
             new_invoices_total = []
-            cached_data = self._load_cached_invoices()
+            cached_data = self._load_cached_invoices(user_email)
             # Email-level dedup: strip the per-row "__N" suffix so an already-processed
             # email (even one that yielded multiple invoices) is recognised and skipped.
             existing_ids = {str(inv.get("id", "")).split("__")[0] for inv in cached_data}
-            
+
             try:
                 from google import genai
                 from google.genai import types
@@ -607,102 +527,85 @@ class GmailInvoiceAgent:
 
                 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-                # Run the scan for each connected mailbox
-                for email in connected_emails:
-                    logging.info(f"Scanning mailbox: {email}")
+                # Scan only the signed-in user's own mailbox
+                logging.info(f"Scanning mailbox: {user_email}")
+                try:
+                    emails = self._fetch_invoice_emails(user_email)
+                except Exception as fetch_err:
+                    logging.error(f"Failed to fetch emails for {user_email}: {fetch_err}")
+                    return {
+                        "status": "error",
+                        "mode": "production",
+                        "message": f"Could not access your Gmail. Please sign in again. ({fetch_err})",
+                    }
 
-                    # Set corresponding token path
-                    if email == "default_legacy":
-                        token_path = os.path.join(BACKEND_DIR, "token.json")
-                    else:
-                        token_path = os.path.join(BACKEND_DIR, f"token_{email}.json")
+                # Parse emails
+                for mail in emails:
+                    msg_id = mail["id"]
+                    if msg_id in existing_ids:
+                        logging.info(f"Skipping duplicate email ID: {msg_id}")
+                        continue
 
-                    # Fetch emails using this specific token
+                    logging.info(f"AI Agent analyzing email: '{mail['subject']}' from {user_email}")
+
+                    prompt = f"Subject: {mail['subject']}\nSender: {mail['sender']}\nDate: {mail['date']}\n\nBody:\n{mail['body']}"
+                    gemini_response = await asyncio.to_thread(
+                        gemini_client.models.generate_content,
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_INSTRUCTION,
+                            response_mime_type="application/json",
+                            response_schema=InvoiceExtractionList,
+                        ),
+                    )
+
                     try:
-                        emails = self._fetch_invoice_emails(token_path)
-                    except Exception as fetch_err:
-                        logging.error(f"Failed to fetch emails for {email}: {fetch_err}")
-                        continue
+                        extracted: InvoiceExtractionList = gemini_response.parsed
+                        if extracted and extracted.invoices:
+                            accepted_in_email = 0
+                            for idx, inv in enumerate(extracted.invoices):
+                                inv_dict = inv.model_dump()
+                                # Verification signal: did this email carry a real PDF receipt?
+                                inv_dict["source_has_pdf"] = mail.get("had_pdf", False)
 
-                    if not emails:
-                        logging.info(f"No new invoice emails found in {email}")
-                        continue
+                                # Strict validation gate — drop hallucinated / non-invoice data
+                                is_valid, reason = _validate_invoice(inv_dict)
+                                if not is_valid:
+                                    logging.info(
+                                        f"REJECTED extraction from '{mail['subject']}': {reason} "
+                                        f"(service={inv_dict.get('service_name')!r}, amount={inv_dict.get('amount')!r})"
+                                    )
+                                    continue
 
-                    # Parse emails
-                    for mail in emails:
-                        msg_id = mail["id"]
-                        if msg_id in existing_ids:
-                            logging.info(f"Skipping duplicate email ID: {msg_id}")
-                            continue
+                                # Unique row id so multi-invoice emails are NOT collapsed in Supabase
+                                row_id = msg_id if accepted_in_email == 0 else f"{msg_id}__{accepted_in_email}"
+                                inv_dict["id"] = row_id
+                                inv_dict["email_subject"] = mail["subject"]
+                                inv_dict["scanned_account"] = user_email
+                                # Persist whether a PDF receipt was attached so the UI knows
+                                # whether to surface the "view original invoice" action.
+                                inv_dict["has_pdf"] = mail.get("had_pdf", False)
 
-                        logging.info(f"AI Agent analyzing email: '{mail['subject']}' from {email}")
+                                # Drop validation-only fields before persisting (keep storage clean)
+                                for k in ("is_invoice", "confidence", "source_quote", "source_has_pdf"):
+                                    inv_dict.pop(k, None)
 
-                        prompt = f"Subject: {mail['subject']}\nSender: {mail['sender']}\nDate: {mail['date']}\n\nBody:\n{mail['body']}"
-                        gemini_response = await asyncio.to_thread(
-                            gemini_client.models.generate_content,
-                            model="gemini-2.5-flash",
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                system_instruction=SYSTEM_INSTRUCTION,
-                                response_mime_type="application/json",
-                                response_schema=InvoiceExtractionList,
-                            ),
-                        )
+                                new_invoices_total.append(inv_dict)
+                                accepted_in_email += 1
+                    except Exception as parse_err:
+                        logging.error(f"Error parsing invoice with Gemini: {parse_err}")
 
-                        try:
-                            extracted: InvoiceExtractionList = gemini_response.parsed
-                            if extracted and extracted.invoices:
-                                accepted_in_email = 0
-                                for idx, inv in enumerate(extracted.invoices):
-                                    inv_dict = inv.model_dump()
-                                    # Verification signal: did this email carry a real PDF receipt?
-                                    inv_dict["source_has_pdf"] = mail.get("had_pdf", False)
-
-                                    # Strict validation gate — drop hallucinated / non-invoice data
-                                    is_valid, reason = _validate_invoice(inv_dict)
-                                    if not is_valid:
-                                        logging.info(
-                                            f"REJECTED extraction from '{mail['subject']}': {reason} "
-                                            f"(service={inv_dict.get('service_name')!r}, amount={inv_dict.get('amount')!r})"
-                                        )
-                                        continue
-
-                                    # Unique row id so multi-invoice emails are NOT collapsed in Supabase
-                                    row_id = msg_id if accepted_in_email == 0 else f"{msg_id}__{accepted_in_email}"
-                                    inv_dict["id"] = row_id
-                                    inv_dict["email_subject"] = mail["subject"]
-                                    inv_dict["scanned_account"] = email
-                                    # Persist whether a PDF receipt was attached so the UI knows
-                                    # whether to surface the "view original invoice" action.
-                                    inv_dict["has_pdf"] = mail.get("had_pdf", False)
-
-                                    # Drop validation-only fields before persisting (keep storage clean)
-                                    for k in ("is_invoice", "confidence", "source_quote", "source_has_pdf"):
-                                        inv_dict.pop(k, None)
-
-                                    new_invoices_total.append(inv_dict)
-                                    accepted_in_email += 1
-                        except Exception as parse_err:
-                            logging.error(f"Error parsing invoice with Gemini: {parse_err}")
-                                
-                        # Write to Google Sheets for this account if sheet ID is specified
-                        if self.sheet_id and new_invoices_total:
-                            try:
-                                self._write_to_google_sheet(new_invoices_total, token_path)
-                            except Exception as sheet_err:
-                                logging.error(f"Failed to write to Google Sheets for {email}: {sheet_err}")
-
-                # Combine new and cached invoices
+                # Combine new and cached invoices, then persist (scoped to this user)
                 all_invoices = new_invoices_total + cached_data
                 all_invoices.sort(key=lambda x: x["date"], reverse=True)
-                self._save_cached_invoices(all_invoices)
-                
-                scanned_list_str = ", ".join(connected_emails)
+                self._save_cached_invoices(all_invoices, user_email)
+
                 return {
                     "status": "success",
                     "mode": "production",
                     "invoices_found": len(new_invoices_total),
-                    "message": f"Successfully scanned accounts ({scanned_list_str}). Found {len(new_invoices_total)} new invoices.",
+                    "message": f"Successfully scanned {user_email}. Found {len(new_invoices_total)} new invoices.",
                     "data": all_invoices
                 }
                 
@@ -714,27 +617,10 @@ class GmailInvoiceAgent:
                     "message": f"Production scan failed: {str(e)}"
                 }
 
-    def _fetch_invoice_emails(self, token_path: str) -> List[Dict[str, Any]]:
-        """Fetches invoice emails using the credentials token specified."""
-        from googleapiclient.discovery import build
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        
-        SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
-        
-        if not os.path.exists(token_path):
-            raise FileNotFoundError(f"Auth token file '{token_path}' not found.")
-            
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-        
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Save the refreshed token
-            with open(token_path, 'w') as token_file:
-                token_file.write(creds.to_json())
-                
-        service = build('gmail', 'v1', credentials=creds)
-        
+    def _fetch_invoice_emails(self, user_email: str) -> List[Dict[str, Any]]:
+        """Fetches invoice emails from the given user's Gmail mailbox."""
+        service = _build_gmail_service_for_user(user_email)
+
         # Two queries: (1) subject keyword search with expanded vocabulary, (2) PDF attachments
         # Combined and deduplicated by message ID to avoid double-processing
         query_keywords = (
@@ -750,7 +636,7 @@ class GmailInvoiceAgent:
         seen_ids: set = set()
         messages = []
         for query in [query_keywords, query_pdf]:
-            logging.info(f"Querying Gmail API at token '{os.path.basename(token_path)}': {query[:60]}...")
+            logging.info(f"Querying Gmail API for '{user_email}': {query[:60]}...")
             page_token = None
             while True:
                 kwargs = {"userId": "me", "q": query, "maxResults": 500}
@@ -766,7 +652,7 @@ class GmailInvoiceAgent:
                 if not page_token:
                     break
 
-        logging.info(f"Total messages to process for '{os.path.basename(token_path)}': {len(messages)}")
+        logging.info(f"Total messages to process for '{user_email}': {len(messages)}")
 
         email_records = []
         for msg in messages:
@@ -868,70 +754,3 @@ class GmailInvoiceAgent:
             })
             
         return email_records
-
-    def _write_to_google_sheet(self, invoices: List[Dict[str, Any]], token_path: Optional[str]):
-        """Writes parsed invoice data to the Google Sheet using the active token credentials."""
-        import gspread
-        from google.oauth2.credentials import Credentials
-        
-        # If token path is not specified, try to find the first valid token to authorize gspread
-        if not token_path or not os.path.exists(token_path):
-            tokens = glob.glob(os.path.join(BACKEND_DIR, "token_*.json"))
-            if tokens:
-                token_path = tokens[0]
-            else:
-                legacy_token = os.path.join(BACKEND_DIR, "token.json")
-                if os.path.exists(legacy_token):
-                    token_path = legacy_token
-                else:
-                    logging.warning("Cannot write to Google Sheet: No active credentials tokens exist.")
-                    return
-            
-        SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-        gc = gspread.Client(auth=creds)
-
-        # Accept either a full URL or a bare sheet ID
-        import re
-        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)', self.sheet_id)
-        sheet_key = match.group(1) if match else self.sheet_id
-
-        sh = gc.open_by_key(sheet_key)
-        worksheet = sh.get_worksheet(0)
-        
-        existing_values = worksheet.get_all_values()
-        
-        if not existing_values:
-            headers = ["תאריך", "שם שירות / חברה", "סכום", "מטבע", "קטגוריה", "מזהה חשבונית", "נושא המייל", "פירוט / תיאור", "מזהה מייל", "תיבת מייל נסרקת", "תקופת מנוי"]
-            worksheet.append_row(headers)
-            existing_ids = set()
-        else:
-            existing_ids = {row[8] for row in existing_values[1:] if len(row) > 8}
-            
-        rows_to_append = []
-        for inv in invoices:
-            msg_id = inv.get("id", "")
-            if msg_id in existing_ids:
-                continue
-                
-            row = [
-                inv.get("date", ""),
-                inv.get("service_name", ""),
-                inv.get("amount", 0.0),
-                inv.get("currency", ""),
-                inv.get("category", ""),
-                inv.get("invoice_id", ""),
-                inv.get("email_subject", ""),
-                inv.get("description", ""),
-                msg_id,
-                inv.get("scanned_account", "simulation"),
-                inv.get("subscription_period", "monthly"),
-            ]
-            rows_to_append.append(row)
-            
-        if rows_to_append:
-            logging.info(f"Writing {len(rows_to_append)} rows to Google Sheets...")
-            worksheet.append_rows(rows_to_append)
-            logging.info("Google Sheets writing completed.")
-        else:
-            logging.info("No new unique rows to write to Google Sheets.")

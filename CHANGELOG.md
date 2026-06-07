@@ -81,7 +81,7 @@ Full pipeline: scan → generate PDF → email delivery on the 20th of each mont
 
 - `backend/mailer.py` — sends the PDF as an email attachment via Gmail API using the existing OAuth token (no extra credentials needed).
 
-- `backend/scheduler.py` — APScheduler `AsyncIOScheduler` with `CronTrigger(day=20, hour=8, minute=0, timezone="Asia/Jerusalem")`. On startup it runs automatically; on the 20th it: scans Gmail → generates PDF → emails to `ofekst@ip-com.co.il`.
+- `backend/scheduler.py` — APScheduler `AsyncIOScheduler` with `CronTrigger(day=20, hour=8, minute=0, timezone="Asia/Jerusalem")`. On startup it runs automatically; on the 20th it: scans Gmail → generates PDF → emails the report. (Email delivery was later removed in the multi-user refactor.)
 
 **Modified files:**
 - `backend/server.py`:

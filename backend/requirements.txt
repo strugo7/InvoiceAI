@@ -12,3 +12,5 @@ pdfplumber==0.11.4
 apscheduler
 python-bidi
 supabase
+PyJWT==2.8.0
+cryptography
