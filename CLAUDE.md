@@ -17,6 +17,29 @@ cd backend && python test_agent.py
 
 The frontend is vanilla HTML/JS with no build step — it is served statically by FastAPI at `http://localhost:8000`.
 
+## Git workflow
+
+Branching follows a GitFlow-lite model. **Never commit features directly to `main`.**
+
+| Branch | Role |
+|--------|------|
+| `main` | Production. Protected by a ruleset — changes land **only via Pull Request** (direct push is blocked, including for the owner). Default branch. |
+| `dev` | Integration branch. Features merge here first for testing. |
+| `feature/*` | Isolated work. Branch off `dev`, merge back into `dev`. |
+
+```bash
+# Start a feature
+git switch dev && git pull
+git switch -c feature/my-feature
+# ...develop + commit...
+git switch dev && git merge feature/my-feature   # (or open a PR into dev)
+git push origin dev
+
+# Release to production once dev is stable
+gh pr create --base main --head dev --title "Release: <summary>"
+gh pr merge --merge        # self-merge allowed (0 approvals required)
+```
+
 ## Architecture
 
 **Gmail Invoice Tracker** is an AI-powered expense tracker. It reads Gmail inboxes, extracts invoice data via Gemini 2.5 Flash (structured output), optionally syncs to Google Sheets, and presents a glassmorphic dashboard.
