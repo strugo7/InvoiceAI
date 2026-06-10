@@ -72,3 +72,33 @@ jobs:
         with:
           sarif_file: opengrep-results.sarif
           category: opengrep-sast
+
+  trivy:
+      name: "📦 Dependency Scan (Trivy)"
+      runs-on: ubuntu-latest
+  
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@v4
+  
+        - name: Install Trivy directly
+          run: |
+            wget -qO- https://github.com/aquasecurity/trivy/releases/download/v0.62.0/trivy_0.62.0_Linux-64bit.tar.gz \
+              | tar xz trivy
+            sudo mv trivy /usr/local/bin/
+  
+        - name: Run Trivy
+          run: |
+            trivy fs \
+              --format sarif \
+              --output trivy-results.sarif \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              .
+  
+        - name: Upload to GitHub Security
+          uses: github/codeql-action/upload-sarif@v4
+          if: always()
+          with:
+            sarif_file: trivy-results.sarif
+            category: trivy-deps
