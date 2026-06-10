@@ -1,0 +1,19 @@
+rules:
+  - id: invoiceai-sql-injection
+    languages: [python]
+    severity: ERROR
+    message: |
+      ⚠️ SQL Injection vulnerability detected!
+      Please sanitize all user inputs before using them in SQL queries.
+    metadata:
+      category: security
+      cwe: CWE-89
+    pattern-either:
+      - pattern: $SQL = "INSERT INTO users (name, email) VALUES \""
+      - pattern: "SELECT * FROM users WHERE name = \\\"\\""
+      - pattern: "' OR '1'='1"
+      - pattern: " UNION SELECT"
+      - pattern: "--"
+      - pattern: "/*"
+      
+    

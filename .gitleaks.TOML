@@ -1,0 +1,27 @@
+title = "InvoiceAI — Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+
+[allowlist]
+description = "InvoiceAI known false positives"
+
+
+paths = [
+  '''\.git/''',
+  '''node_modules/''',
+  '''\.venv/''',
+  '''__pycache__/''',
+  '''tests/fixtures/''',    
+]
+
+
+regexes = [
+  '''YOUR_SERVICE_ROLE_KEY_HERE''',  
+  '''your_supabase_key_here''',
+  '''your_gemini_key_here''',
+  '''your_key_here''',
+  '''EXAMPLE''',
+  '''<YOUR_''',                      
+]

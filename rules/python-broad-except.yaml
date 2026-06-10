@@ -1,0 +1,51 @@
+rules:
+  # ===========================================================================
+  # RULE 2 — exact structural match (binding a metavariable you don't reuse)
+  #
+  # Flags `except Exception` blocks that swallow the error with a bare `pass`.
+  # You have MANY broad excepts in agent.py, but they all log — so this fires
+  # on NONE of them today. That's the point: it catches the bad pattern only,
+  # so it stays quiet until someone introduces a silent failure.
+  # ===========================================================================
+  - id: silently-swallowed-exception
+    languages: [python]
+    severity: WARNING
+    message: >
+      Broad `except` that swallows the error with `pass`. At minimum log it;
+      prefer catching a specific exception type. Silent failures hide
+      Gmail/Gemini/Sheets errors during the sync loop.
+    metadata:
+      category: best-practice
+    # `$E` binds the exception name; we don't reuse it, but it makes the
+    # pattern match `except Exception as <anything>:` as well as bare form.
+    pattern: |
+      try:
+          ...
+      except Exception as $E:
+          pass
+
+  # ===========================================================================
+  # RULE 3 — `patterns:` (AND) + `metavariable-regex` to exclude false matches
+  #
+  # Flags print() used as app logging, but EXCLUDES test status banners.
+  #
+  # KEY LESSON: `print("...")` does NOT mean "a string containing anything".
+  # In a pattern, `"..."` matches a WHOLE string literal, not a substring. To
+  # filter by the string's CONTENT, capture it in a metavariable ($MSG) and
+  # constrain it with `metavariable-regex`. A negative lookahead `(?!...)`
+  # turns an "allow" regex into a "deny" filter.
+  # ===========================================================================
+  - id: print-used-instead-of-logging
+    languages: [python]
+    severity: INFO
+    message: >
+      Use the `logging` module instead of print() in application code so
+      output is structured and controllable by level.
+    metadata:
+      category: best-practice
+    patterns:
+      - pattern: print($MSG)
+      - metavariable-regex:
+          metavariable: $MSG
+          # $MSG must NOT contain any of these (test-banner) tokens.
+          regex: '^(?!.*(PASSED|passed|✅)).*$'

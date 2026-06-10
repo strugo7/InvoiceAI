@@ -1,0 +1,51 @@
+rules:
+  # ===========================================================================
+  # RULE 1 — structural matching, metavariables, ellipsis, and AUTOFIX
+  #
+  # Flags a FastAPI CORS middleware that allows ANY origin (`["*"]`) *together
+  # with* credentials — the genuinely dangerous combo (browsers forbid it for
+  # plain fetches, but server-side it lets any site hit your authed API).
+  # Matches backend/server.py:35-41.
+  #
+  # KEY LESSON: match this STRUCTURALLY, not with two `pattern-regex` clauses.
+  # When you AND clauses under `patterns:`, Semgrep/Opengrep intersects their
+  # match ranges. Two regexes on different lines have an EMPTY intersection, so
+  # the rule silently never fires. A single structural pattern avoids that.
+  # ===========================================================================
+  - id: fastapi-wildcard-cors-with-credentials
+    languages: [python]
+    severity: ERROR
+    message: >
+      CORS allows any origin (allow_origins=["*"]) while also allowing
+      credentials. Pin allow_origins to an explicit list of trusted origins.
+    metadata:
+      category: security
+      cwe: "CWE-942: Overly Permissive Cross-domain Whitelist"
+      references:
+        - https://fastapi.tiangolo.com/tutorial/cors/
+
+    # `$APP`   -> metavariable: matches any expression, binds it to $APP.
+    # `...`    -> ellipsis: matches zero or more args/statements/anything.
+    # `...,`   -> ellipsis between keyword args. Opengrep matches kwargs
+    #             ORDER-INDEPENDENTLY, so this fires no matter where the two
+    #             flagged kwargs sit in the call.
+    pattern: |
+      $APP.add_middleware(
+          CORSMiddleware,
+          ...,
+          allow_origins=["*"],
+          ...,
+          allow_credentials=True,
+          ...
+      )
+
+    # `fix:` enables autofix. Run `opengrep scan --autofix --config rules .`
+    # to rewrite matches in place. Here we tighten the origin list.
+    fix: |
+      $APP.add_middleware(
+          CORSMiddleware,
+          allow_origins=["http://localhost:8000"],
+          allow_credentials=True,
+          allow_methods=["*"],
+          allow_headers=["*"],
+      )
