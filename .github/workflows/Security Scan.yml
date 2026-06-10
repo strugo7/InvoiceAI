@@ -1,0 +1,104 @@
+name: Security Scan
+
+# ─── מתי הסריקה רצה ───────────────────────────────────────────
+on:
+  push:
+    branches: ["**"]          # כל push לכל branch
+  pull_request:
+    branches: [main, develop] # כל PR לעבר main או develop
+  schedule:
+    - cron: "0 3 * * 1"       # כל יום שני ב-03:00 — סריקה שבועית מלאה
+
+# ─── Job 1: Gitleaks — Secret Scanning ───────────────────────
+jobs:
+  gitleaks:
+    name: "🔑 Secret Scanning (Gitleaks)"
+    runs-on: ubuntu-latest
+
+    steps:
+      # שלב 1 — הורד את כל ה-repo כולל כל ה-history
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # חשוב! בלי זה Gitleaks רואה רק commit אחד
+
+      # שלב 2 — הרץ Gitleaks
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # אוטומטי — לא צריך להגדיר
+        with:
+          config-path: .gitleaks.toml  # הקובץ שיצרנו עם allowlist
+
+      # שלב 3 — שמור דוח (גם אם הסריקה נכשלה)
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: results.sarif
+          if-no-files-found: ignore
+
+  # ─── Job 2: Opengrep — SAST ──────────────────────────────────
+  opengrep:
+    name: "🔍 SAST Scan (Opengrep)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Opengrep
+        run: pip install opengrep-cli
+
+      - name: Run Opengrep
+        run: |
+          opengrep scan \
+            --config p/python \
+            --config p/secrets \
+            --config rules/ \
+            --sarif \
+            --output opengrep-results.sarif \
+            . || true  # לא כושל את ה-workflow אם יש findings
+
+      - name: Upload Opengrep SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: opengrep-results.sarif
+          category: opengrep-sast
+
+  trivy:
+      name: "📦 Dependency Scan (Trivy)"
+      runs-on: ubuntu-latest
+  
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@v4
+  
+        - name: Install Trivy directly
+          run: |
+            wget -qO- https://github.com/aquasecurity/trivy/releases/download/v0.62.0/trivy_0.62.0_Linux-64bit.tar.gz \
+              | tar xz trivy
+            sudo mv trivy /usr/local/bin/
+  
+        - name: Run Trivy
+          run: |
+            trivy fs \
+              --format sarif \
+              --output trivy-results.sarif \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              .
+  
+        - name: Upload to GitHub Security
+          uses: github/codeql-action/upload-sarif@v4
+          if: always()
+          with:
+            sarif_file: trivy-results.sarif
+            category: trivy-deps
