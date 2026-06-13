@@ -40,31 +40,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from dotenv import set_key
+
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
 
 class SettingsModel(BaseModel):
     use_mock: bool = False
     sheet_id: Optional[str] = ""
 
 def load_config() -> Dict[str, Any]:
-    """Loads configuration settings from config.json."""
+    """Loads configuration settings.
+
+    `use_mock` is stored in config.json (safe to commit). `sheet_id` is sourced
+    from the SHEET_ID env var (.env, untracked) so the resource id never lands in
+    version control.
+    """
+    config: Dict[str, Any] = {"use_mock": False}
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                stored = json.load(f)
+                config["use_mock"] = stored.get("use_mock", False)
         except Exception as e:
             logging.error(f"Error loading config: {e}")
-    
-    # Default config
-    default_config = {"use_mock": False, "sheet_id": ""}
-    save_config(default_config)
-    return default_config
+    else:
+        save_config(config)
+
+    config["sheet_id"] = os.environ.get("SHEET_ID", "")
+    return config
 
 def save_config(config: Dict[str, Any]):
-    """Saves configuration settings to config.json."""
+    """Persists `use_mock` to config.json.
+
+    `sheet_id` is intentionally NOT written here — it lives in .env (see
+    update_settings) to keep it out of git.
+    """
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+            json.dump({"use_mock": config.get("use_mock", False)}, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logging.error(f"Error saving config: {e}")
 
@@ -77,10 +91,19 @@ def get_settings():
 
 @app.post("/api/settings")
 def update_settings(settings: SettingsModel):
-    """Update settings."""
+    """Update settings. `use_mock` -> config.json; `sheet_id` -> .env (untracked)."""
     config = settings.model_dump()
     save_config(config)
-    return {"status": "success", "message": "Settings updated successfully", "config": config}
+
+    # Persist sheet_id to .env and the live environment so it never enters git.
+    sheet_id = config.get("sheet_id") or ""
+    try:
+        set_key(ENV_FILE, "SHEET_ID", sheet_id)
+        os.environ["SHEET_ID"] = sheet_id
+    except Exception as e:
+        logging.error(f"Error saving SHEET_ID to .env: {e}")
+
+    return {"status": "success", "message": "Settings updated successfully", "config": load_config()}
 
 
 @app.get("/api/invoices")
