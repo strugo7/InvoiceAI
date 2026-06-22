@@ -63,6 +63,15 @@ app.add_middleware(
     https_only=_https_only,
 )
 
+# Per-client-IP rate limiting (defence against endpoint hammering / cost abuse).
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 from dotenv import set_key
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -182,21 +191,32 @@ def get_invoice_pdf_endpoint(email_id: str, account: str):
 
 
 @app.post("/api/sync")
-async def trigger_sync():
-    """Manually trigger the Gmail scan agent."""
+@limiter.limit("5/minute")
+async def trigger_sync(request: Request):
+    """Manually trigger the Gmail scan agent.
+
+    Refuses to start (409) if a scan is already running, so repeated/concurrent
+    clicks can't fan out into duplicate Gmail + Gemini call storms.
+    """
+    from concurrency import scan_lock, scan_in_progress
+
+    if scan_in_progress():
+        raise HTTPException(status_code=409, detail="A scan is already in progress. Please wait for it to finish.")
+
     config = load_config()
     use_mock = config.get("use_mock", True)
     sheet_id = config.get("sheet_id", "")
-    
+
     # If sheet_id is empty, set to None
     sheet_id_param = sheet_id if sheet_id else None
-    
+
     agent = GmailInvoiceAgent(use_mock=use_mock, sheet_id=sheet_id_param)
-    
+
     logging.info(f"Sync triggered. Mode: {'MOCK' if use_mock else 'PRODUCTION'}")
-    
-    result = await agent.scan_and_process()
-    
+
+    async with scan_lock:
+        result = await agent.scan_and_process()
+
     if result["status"] == "success":
         return result
     else:
@@ -213,6 +233,7 @@ def get_accounts():
 
 
 @app.get("/api/auth/login")
+@limiter.limit("10/minute")
 def auth_login(request: Request):
     """Start the Google OAuth Web flow.
 
@@ -241,6 +262,7 @@ def auth_login(request: Request):
 
 
 @app.get("/api/auth/callback")
+@limiter.limit("30/minute")
 def auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
     """OAuth redirect target: exchange the code for tokens and store them.
 
