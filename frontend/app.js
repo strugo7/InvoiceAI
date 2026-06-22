@@ -320,28 +320,26 @@ function setupAccountsConnector() {
     
     btnConnect.addEventListener("click", async () => {
         if (btnConnect.classList.contains("disabled")) return;
-        
+
         btnConnect.classList.add("disabled");
-        btnConnect.querySelector("span").textContent = "מתחבר...";
-        
-        showToast("חלון דפדפן נפתח במחשבך. אנא אשר את הגישה לסוכן בחשבון ה-Gmail שלך...", "info");
-        
+        btnConnect.querySelector("span").textContent = "מפנה לגוגל...";
+
         try {
-            const response = await fetch("/api/accounts/connect", {
-                method: "POST"
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                showToast(`התחברת בהצלחה לחשבון: ${data.email}!`, "success");
-                await fetchAccounts();
-                updateStatusIndicators();
-            } else {
-                const errData = await response.json();
-                showToast(`החיבור נכשל: ${errData.detail || "שגיאה בחיבור"}`, "error");
+            // Ask the backend for the Google consent URL, then redirect the whole
+            // page to it. Google sends the user back to /api/auth/callback, which
+            // stores the account and redirects here with ?connect=success.
+            const response = await fetch("/api/auth/login");
+            const data = await response.json();
+
+            if (response.ok && data.auth_url) {
+                showToast("מפנה אותך לאישור הגישה בגוגל...", "info");
+                window.location.href = data.auth_url;
+                return; // navigating away
             }
+
+            showToast(`החיבור נכשל: ${data.detail || "שגיאה בחיבור"}`, "error");
         } catch (error) {
-            console.error("Error connecting account:", error);
+            console.error("Error starting OAuth login:", error);
             showToast("שגיאה בתקשורת עם השרת בעת חיבור החשבון", "error");
         } finally {
             btnConnect.classList.remove("disabled");
@@ -349,6 +347,28 @@ function setupAccountsConnector() {
         }
     });
 }
+
+// After returning from Google's OAuth redirect the URL carries ?connect=success|error.
+// Show a toast, refresh the account list, and clean the query string.
+function handleOAuthReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("connect");
+    if (!result) return;
+
+    if (result === "success") {
+        showToast("חשבון ה-Gmail חובר בהצלחה!", "success");
+        if (typeof fetchAccounts === "function") fetchAccounts();
+        if (typeof updateStatusIndicators === "function") updateStatusIndicators();
+    } else {
+        showToast("חיבור חשבון ה-Gmail נכשל. נסה שוב.", "error");
+    }
+
+    // Strip the query param so a refresh doesn't re-trigger the toast.
+    const cleanUrl = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, document.title, cleanUrl);
+}
+
+document.addEventListener("DOMContentLoaded", handleOAuthReturn);
 
 function updateAccountsCardVisibility() {
     const useMock = document.getElementById("setting-use-mock").checked;

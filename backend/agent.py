@@ -3,11 +3,12 @@ import re
 import json
 import logging
 import asyncio
-import glob
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import pydantic
 from dotenv import load_dotenv
+
+import token_store
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -138,39 +139,21 @@ def generate_mock_invoices() -> List[Dict[str, Any]]:
 
 
 def get_connected_accounts() -> List[str]:
-    """Scans the backend directory and returns a list of connected Gmail addresses."""
-    tokens = glob.glob(os.path.join(BACKEND_DIR, "token_*.json"))
-    emails = []
-    for t in tokens:
-        filename = os.path.basename(t)
-        # Extract email between 'token_' and '.json'
-        email = filename[6:-5]
-        emails.append(email)
-    
-    # Also support legacy token.json as 'legacy_default' if no other token is found
-    legacy_token = os.path.join(BACKEND_DIR, "token.json")
-    if os.path.exists(legacy_token) and not emails:
-        emails.append("default_legacy")
-        
-    return emails
+    """Returns the connected Gmail addresses from the encrypted Supabase token store."""
+    return token_store.list_accounts()
 
 
-def _build_gmail_service(token_path: str):
-    """Builds an authenticated Gmail API service from a token file, refreshing if needed."""
+def _build_gmail_service(email: str):
+    """Builds an authenticated Gmail API service for a connected account.
+
+    Credentials are loaded (and refreshed) from the encrypted token store; no
+    local token files are involved.
+    """
     from googleapiclient.discovery import build
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
 
-    SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
-
-    if not os.path.exists(token_path):
-        raise FileNotFoundError(f"Auth token file '{token_path}' not found.")
-
-    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        with open(token_path, 'w') as token_file:
-            token_file.write(creds.to_json())
+    creds = token_store.get_credentials(email)
+    if not creds:
+        raise FileNotFoundError(f"No stored credentials for account '{email}'.")
 
     return build('gmail', 'v1', credentials=creds)
 
@@ -277,9 +260,8 @@ def get_invoice_document(email_id: str, account: str) -> Dict[str, Any]:
     if account not in get_connected_accounts():
         logging.warning(f"Document request for unknown account '{account}'")
         return {"type": "none"}
-    token_path = os.path.join(BACKEND_DIR, f"token_{account}.json")
     try:
-        service = _build_gmail_service(token_path)
+        service = _build_gmail_service(account)
         full_msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
         payload = full_msg.get('payload', {})
         if _find_pdf_part(payload):
@@ -306,9 +288,8 @@ def get_invoice_pdf(email_id: str, account: str):
         logging.warning(f"PDF request for unknown account '{account}'")
         return None
 
-    token_path = os.path.join(BACKEND_DIR, f"token_{account}.json")
     try:
-        service = _build_gmail_service(token_path)
+        service = _build_gmail_service(account)
         full_msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
         payload = full_msg.get('payload', {})
         pdf_part = _find_pdf_part(payload)
@@ -332,57 +313,8 @@ def get_invoice_pdf(email_id: str, account: str):
 
 
 def disconnect_account(email: str) -> bool:
-    """Deletes the token file corresponding to the specified email."""
-    if email == "default_legacy":
-        token_path = os.path.join(BACKEND_DIR, "token.json")
-    else:
-        token_path = os.path.join(BACKEND_DIR, f"token_{email}.json")
-        
-    if os.path.exists(token_path):
-        os.remove(token_path)
-        logging.info(f"Disconnected account and deleted token for: {email}")
-        return True
-    return False
-
-
-async def connect_new_gmail_account() -> str:
-    """Triggers OAuth 2.0 flow to authorize a new Gmail account and saves its token file dynamically."""
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from googleapiclient.discovery import build
-
-    SCOPES = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send',
-        'https://www.googleapis.com/auth/spreadsheets',
-    ]
-    creds_path = os.path.join(BACKEND_DIR, "credentials.json")
-    
-    if not os.path.exists(creds_path):
-        raise FileNotFoundError(
-            "Credentials file 'credentials.json' not found. "
-            "Please upload it to the backend folder before connecting an account."
-        )
-        
-    flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
-    
-    # Run the local server in a separate thread so it doesn't block the asyncio event loop
-    creds = await asyncio.to_thread(flow.run_local_server, port=0, open_browser=True)
-    
-    # Query Gmail API to get the email address of the authenticated user
-    service = build('gmail', 'v1', credentials=creds)
-    profile = service.users().getProfile(userId='me').execute()
-    email_address = profile.get("emailAddress")
-    
-    if not email_address:
-        raise ValueError("Could not retrieve email address from authorized profile.")
-        
-    # Save the token to a dynamic path matching the email address
-    token_path = os.path.join(BACKEND_DIR, f"token_{email_address}.json")
-    with open(token_path, 'w') as token_file:
-        token_file.write(creds.to_json())
-        
-    logging.info(f"Successfully connected new Gmail account: {email_address}")
-    return email_address
+    """Removes the stored (encrypted) credentials for the specified account."""
+    return token_store.delete_account(email)
 
 
 VALID_CURRENCIES = {"ILS", "USD", "EUR"}
@@ -546,7 +478,7 @@ class GmailInvoiceAgent:
             # If sheet ID is provided, try to write to Google Sheets too
             if self.sheet_id:
                 try:
-                    self._write_to_google_sheet(mock_invoices, token_path=None)
+                    self._write_to_google_sheet(mock_invoices)
                 except Exception as e:
                     logging.warning(f"Could not write mock data to Google Sheets: {e}. Keeping local cache.")
                     
@@ -611,15 +543,9 @@ class GmailInvoiceAgent:
                 for email in connected_emails:
                     logging.info(f"Scanning mailbox: {email}")
 
-                    # Set corresponding token path
-                    if email == "default_legacy":
-                        token_path = os.path.join(BACKEND_DIR, "token.json")
-                    else:
-                        token_path = os.path.join(BACKEND_DIR, f"token_{email}.json")
-
-                    # Fetch emails using this specific token
+                    # Fetch emails using this account's stored credentials
                     try:
-                        emails = self._fetch_invoice_emails(token_path)
+                        emails = self._fetch_invoice_emails(email)
                     except Exception as fetch_err:
                         logging.error(f"Failed to fetch emails for {email}: {fetch_err}")
                         continue
@@ -688,7 +614,7 @@ class GmailInvoiceAgent:
                         # Write to Google Sheets for this account if sheet ID is specified
                         if self.sheet_id and new_invoices_total:
                             try:
-                                self._write_to_google_sheet(new_invoices_total, token_path)
+                                self._write_to_google_sheet(new_invoices_total, account=email)
                             except Exception as sheet_err:
                                 logging.error(f"Failed to write to Google Sheets for {email}: {sheet_err}")
 
@@ -714,25 +640,14 @@ class GmailInvoiceAgent:
                     "message": f"Production scan failed: {str(e)}"
                 }
 
-    def _fetch_invoice_emails(self, token_path: str) -> List[Dict[str, Any]]:
-        """Fetches invoice emails using the credentials token specified."""
+    def _fetch_invoice_emails(self, account: str) -> List[Dict[str, Any]]:
+        """Fetches invoice emails for a connected account using its stored credentials."""
         from googleapiclient.discovery import build
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        
-        SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
-        
-        if not os.path.exists(token_path):
-            raise FileNotFoundError(f"Auth token file '{token_path}' not found.")
-            
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-        
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Save the refreshed token
-            with open(token_path, 'w') as token_file:
-                token_file.write(creds.to_json())
-                
+
+        creds = token_store.get_credentials(account)
+        if not creds:
+            raise FileNotFoundError(f"No stored credentials for account '{account}'.")
+
         service = build('gmail', 'v1', credentials=creds)
         
         # Two queries: (1) subject keyword search with expanded vocabulary, (2) PDF attachments
@@ -750,7 +665,7 @@ class GmailInvoiceAgent:
         seen_ids: set = set()
         messages = []
         for query in [query_keywords, query_pdf]:
-            logging.info(f"Querying Gmail API at token '{os.path.basename(token_path)}': {query[:60]}...")
+            logging.info(f"Querying Gmail API for '{account}': {query[:60]}...")
             page_token = None
             while True:
                 kwargs = {"userId": "me", "q": query, "maxResults": 500}
@@ -766,7 +681,7 @@ class GmailInvoiceAgent:
                 if not page_token:
                     break
 
-        logging.info(f"Total messages to process for '{os.path.basename(token_path)}': {len(messages)}")
+        logging.info(f"Total messages to process for '{account}': {len(messages)}")
 
         email_records = []
         for msg in messages:
@@ -869,26 +784,25 @@ class GmailInvoiceAgent:
             
         return email_records
 
-    def _write_to_google_sheet(self, invoices: List[Dict[str, Any]], token_path: Optional[str]):
-        """Writes parsed invoice data to the Google Sheet using the active token credentials."""
+    def _write_to_google_sheet(self, invoices: List[Dict[str, Any]], account: Optional[str] = None):
+        """Writes parsed invoice data to the Google Sheet using stored OAuth credentials.
+
+        Authorizes gspread with the given account's credentials, or the first
+        connected account when none is specified (e.g. mock-mode writes).
+        """
         import gspread
-        from google.oauth2.credentials import Credentials
-        
-        # If token path is not specified, try to find the first valid token to authorize gspread
-        if not token_path or not os.path.exists(token_path):
-            tokens = glob.glob(os.path.join(BACKEND_DIR, "token_*.json"))
-            if tokens:
-                token_path = tokens[0]
-            else:
-                legacy_token = os.path.join(BACKEND_DIR, "token.json")
-                if os.path.exists(legacy_token):
-                    token_path = legacy_token
-                else:
-                    logging.warning("Cannot write to Google Sheet: No active credentials tokens exist.")
-                    return
-            
-        SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+        if not account:
+            accounts = get_connected_accounts()
+            if not accounts:
+                logging.warning("Cannot write to Google Sheet: no connected accounts.")
+                return
+            account = accounts[0]
+
+        creds = token_store.get_credentials(account)
+        if not creds:
+            logging.warning(f"Cannot write to Google Sheet: no credentials for '{account}'.")
+            return
         gc = gspread.Client(auth=creds)
 
         # Accept either a full URL or a bare sheet ID
