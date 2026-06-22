@@ -9,6 +9,8 @@ backend/.env
 backend/credentials.json
 backend/token_*.json
 backend/token.json
+backend/token_ofek0193@gmail.com.json
+backend/token_ofekstudent99@gmail.com.json
 
 # Generated files
 backend/reports/

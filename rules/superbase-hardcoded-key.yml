@@ -1,0 +1,15 @@
+rules:
+  - id: invoiceai-hardcoded-supabase-key
+    languages: [python]
+    severity: ERROR
+    message: |
+      ⚠️ Supabase Service Key is hardcoded in the code!
+      Use: os.environ.get("SUPABASE_SERVICE_KEY")
+      Never put an API key hardcoded in the code!
+    metadata:
+      category: security
+      cwe: CWE-798
+    pattern-either:
+      - pattern: $KEY = "eyJ..."
+      - pattern: create_client(..., "eyJ...")
+      - pattern: os.environ.get(..., "eyJ...")

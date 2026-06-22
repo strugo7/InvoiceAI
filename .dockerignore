@@ -1,0 +1,23 @@
+.env
+.git
+__pycache__/
+.venv/
+*.pyc
+.gitignore
+/backend/token_ofek0193@gmail.com.json
+/backend/token_ofekstudent99@gmail.com.json
+/backend/credentials.json
+*.pem
+*.key
+
+# חסימת קבצי מידע זמניים ודוגמאות פיתוח
+/backend/invoice.json
+uploads/
+*.pdf
+
+# חסימת קבצי מערכת ופיתוח מיותרים
+.git
+.gitignore
+__pycache__/
+.venv/
+*.pyc
