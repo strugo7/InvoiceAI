@@ -1,0 +1,28 @@
+# 'version' is obsolete in Compose v2 and only emits a warning — omitted.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: invoiceai-backend
+    # App listens on 8000 (see server.py / Dockerfile PORT).
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - ./backend/.env
+    # NOTE: we deliberately do NOT mount ./backend:/app — that would shadow
+    # /app/deps (the vendored dependencies baked by the builder stage) and the
+    # app would fail to import its packages. The code is baked into the image.
+    # Only the frontend is mounted for live editing; it doesn't clobber deps.
+    volumes:
+      - ./frontend:/app/static
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s

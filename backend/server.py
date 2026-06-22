@@ -267,7 +267,11 @@ async def send_monthly_report(month: str = ""):
 # Serve frontend static files
 # We mount this at the very end so that API routes take priority.
 # The index.html should be served at the root '/' path.
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+# FRONTEND_DIR lets the container point at its baked-in copy (e.g. /app/static);
+# locally it falls back to the sibling ../frontend directory.
+frontend_dir = os.environ.get("FRONTEND_DIR") or os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "frontend"
+)
 if os.path.exists(frontend_dir):
     app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 else:
@@ -277,4 +281,7 @@ else:
 if __name__ == "__main__":
     import uvicorn
     load_config()
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", "8000"))
+    # reload is a dev-only convenience; default OFF so containers run a stable server.
+    reload = os.environ.get("UVICORN_RELOAD", "false").lower() == "true"
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=reload)
