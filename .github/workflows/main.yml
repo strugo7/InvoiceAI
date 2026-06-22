@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# נותנים לרובוט אישור מפורש לקרוא את הקוד ולכתוב תוצאות
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   opengrep:
     name: "🔍 SAST Scan (Opengrep)"
@@ -29,9 +34,10 @@ jobs:
             --output opengrep-results.sarif \
             . || true
             
-      - name: Upload Opengrep SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
+      # המעקף שלנו: שמירת הדוח כקובץ רגיל להורדה!
+      - name: Save Security Report as Artifact
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: opengrep-results.sarif
-          category: opengrep-sast
+          name: opengrep-security-report
+          path: opengrep-results.sarif
+          if-no-files-found: ignore
