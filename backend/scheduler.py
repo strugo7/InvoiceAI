@@ -17,15 +17,24 @@ async def _monthly_report_job():
     from report_generator import generate_monthly_pdf
     from mailer import send_report_email
 
+    from concurrency import scan_lock, scan_in_progress
+
     now = datetime.now()
     year, month = now.year, now.month
     month_label = now.strftime("%B %Y")
 
     logging.info(f"[Scheduler] Starting monthly report job for {month_label}")
 
+    # Skip if a manual sync is already running — share the same lock as /api/sync
+    # so the scheduled job and a user click never scan concurrently.
+    if scan_in_progress():
+        logging.warning("[Scheduler] A scan is already in progress; skipping this run.")
+        return
+
     # 1. Scan Gmail
     agent = GmailInvoiceAgent(use_mock=False)
-    result = await agent.scan_and_process()
+    async with scan_lock:
+        result = await agent.scan_and_process()
     if result.get("status") != "success":
         logging.error(f"[Scheduler] Scan failed: {result.get('message')}")
         return

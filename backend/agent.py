@@ -9,6 +9,7 @@ import pydantic
 from dotenv import load_dotenv
 
 import token_store
+from retry import execute_with_retry as _execute_with_retry, call_with_retry as _call_with_retry
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -58,6 +59,22 @@ class InvoiceExtractionList(pydantic.BaseModel):
 # Local Cache File for Simulation / Backup
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "invoices.json")
 BACKEND_DIR = os.path.dirname(__file__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Reads a positive int from the environment, falling back to `default`."""
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# Guardrails against runaway API usage (overridable via env):
+#   SCAN_LOOKBACK_DAYS   — how far back Gmail is searched (bounds the result set).
+#   MAX_EMAILS_PER_SCAN  — hard cap on messages processed per scan, which also
+#                          caps the number of paid Gemini calls a scan can make.
+SCAN_LOOKBACK_DAYS = _env_int("SCAN_LOOKBACK_DAYS", 90)
+MAX_EMAILS_PER_SCAN = _env_int("MAX_EMAILS_PER_SCAN", 300)
 
 # Mock Invoices Generator for Simulation Mode
 def generate_mock_invoices() -> List[Dict[str, Any]]:
@@ -564,15 +581,22 @@ class GmailInvoiceAgent:
                         logging.info(f"AI Agent analyzing email: '{mail['subject']}' from {email}")
 
                         prompt = f"Subject: {mail['subject']}\nSender: {mail['sender']}\nDate: {mail['date']}\n\nBody:\n{mail['body']}"
+
+                        def _call_gemini():
+                            return gemini_client.models.generate_content(
+                                model="gemini-2.5-flash",
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    system_instruction=SYSTEM_INSTRUCTION,
+                                    response_mime_type="application/json",
+                                    response_schema=InvoiceExtractionList,
+                                ),
+                            )
+
+                        # Off-loop thread + bounded backoff so a Gemini 429 doesn't
+                        # fail the whole scan or trigger an uncontrolled caller retry.
                         gemini_response = await asyncio.to_thread(
-                            gemini_client.models.generate_content,
-                            model="gemini-2.5-flash",
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                system_instruction=SYSTEM_INSTRUCTION,
-                                response_mime_type="application/json",
-                                response_schema=InvoiceExtractionList,
-                            ),
+                            _call_with_retry, _call_gemini, what="Gemini"
                         )
 
                         try:
@@ -651,27 +675,37 @@ class GmailInvoiceAgent:
         service = build('gmail', 'v1', credentials=creds)
         
         # Two queries: (1) subject keyword search with expanded vocabulary, (2) PDF attachments
-        # Combined and deduplicated by message ID to avoid double-processing
+        # Combined and deduplicated by message ID to avoid double-processing.
+        # Bounded by SCAN_LOOKBACK_DAYS so we never sweep the entire mailbox.
         query_keywords = (
-            "in:anywhere newer_than:400d "
+            f"in:anywhere newer_than:{SCAN_LOOKBACK_DAYS}d "
             "subject:(invoice OR receipt OR bill OR payment OR order OR subscription OR "
             "חשבונית OR קבלה OR תשלום OR הזמנה OR מנוי OR חשבון OR חשבוניות)"
         )
         query_pdf = (
-            "in:anywhere newer_than:400d "
+            f"in:anywhere newer_than:{SCAN_LOOKBACK_DAYS}d "
             "has:attachment filename:pdf"
         )
 
         seen_ids: set = set()
         messages = []
+        # Hard cap: stop paginating once we have MAX_EMAILS_PER_SCAN unique messages,
+        # so a single scan can't fan out into unbounded list/get/Gemini calls.
+        capped = False
         for query in [query_keywords, query_pdf]:
+            if capped:
+                break
             logging.info(f"Querying Gmail API for '{account}': {query[:60]}...")
             page_token = None
             while True:
-                kwargs = {"userId": "me", "q": query, "maxResults": 500}
+                remaining = MAX_EMAILS_PER_SCAN - len(messages)
+                if remaining <= 0:
+                    capped = True
+                    break
+                kwargs = {"userId": "me", "q": query, "maxResults": min(500, remaining)}
                 if page_token:
                     kwargs["pageToken"] = page_token
-                results = service.users().messages().list(**kwargs).execute()
+                results = _execute_with_retry(service.users().messages().list(**kwargs))
                 for m in results.get("messages", []):
                     if m["id"] not in seen_ids:
                         seen_ids.add(m["id"])
@@ -680,14 +714,21 @@ class GmailInvoiceAgent:
                 logging.info(f"  batch fetched (unique total so far: {len(messages)})")
                 if not page_token:
                     break
+        if capped:
+            logging.warning(
+                f"Reached MAX_EMAILS_PER_SCAN={MAX_EMAILS_PER_SCAN} for '{account}'; "
+                "remaining messages will be picked up on the next scan."
+            )
 
         logging.info(f"Total messages to process for '{account}': {len(messages)}")
 
         email_records = []
         for msg in messages:
             msg_id = msg['id']
-            full_msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-            
+            full_msg = _execute_with_retry(
+                service.users().messages().get(userId='me', id=msg_id, format='full')
+            )
+
             headers = full_msg.get('payload', {}).get('headers', [])
             subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), "No Subject")
             sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), "Unknown Sender")
@@ -753,9 +794,11 @@ class GmailInvoiceAgent:
                     pdf_bytes = base64.urlsafe_b64decode(pdf_info['data'].encode('utf-8'))
                 elif pdf_info['attachmentId']:
                     try:
-                        att = service.users().messages().attachments().get(
-                            userId='me', messageId=msg_id, id=pdf_info['attachmentId']
-                        ).execute()
+                        att = _execute_with_retry(
+                            service.users().messages().attachments().get(
+                                userId='me', messageId=msg_id, id=pdf_info['attachmentId']
+                            )
+                        )
                         pdf_bytes = base64.urlsafe_b64decode(att['data'].encode('utf-8'))
                     except Exception as att_err:
                         logging.warning(f"Could not fetch PDF attachment {pdf_info['attachmentId']}: {att_err}")
