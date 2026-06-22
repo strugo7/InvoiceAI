@@ -1,5 +1,79 @@
 # InvoiceAI — Changelog
 
+## Session 2026-06-22
+
+---
+
+### ✨ New Features
+
+#### OAuth 2.0 Web Application flow (replaces desktop flow)
+Reworked Gmail account connection so it works inside a container / in the cloud,
+removing the dependency on a local `credentials.json` file and on
+`InstalledAppFlow.run_local_server` (which opened a browser **on the server** and
+cannot run in a headless container).
+
+- **New `backend/oauth_flow.py`** — builds a Google **Web** OAuth flow entirely
+  from env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`.
+  No `credentials.json`.
+- **New endpoints in `server.py`:**
+  - `GET /api/auth/login` — returns the Google consent URL and stores an
+    anti-CSRF `state` in a signed session cookie.
+  - `GET /api/auth/callback` — verifies `state`, exchanges the `code` for tokens,
+    reads the account email, persists the **encrypted** credentials, and redirects
+    back to the dashboard (`/?connect=success|error#settings`).
+  - Removed the old `POST /api/accounts/connect`.
+- **`SessionMiddleware`** (Starlette) added, keyed by `SESSION_SECRET`, `same_site=lax`,
+  `https_only` auto-enabled when the redirect URI is HTTPS.
+- **Frontend (`app.js`)** — the "חבר חשבון Gmail" button now calls `/api/auth/login`
+  and redirects the page to Google; on return it reads `?connect=` and shows a toast.
+
+#### Encrypted, Supabase-backed token storage (no more `token_*.json`)
+- **New `backend/token_store.py`** — per-account Gmail credentials are stored in a
+  new Supabase table `gmail_accounts`, **encrypted at rest with Fernet** (AES-128-CBC
+  + HMAC) using the `TOKEN_ENC_KEY` env var. Plaintext refresh tokens never touch
+  disk. Load / refresh / save / delete all go through this module; refreshed tokens
+  are re-encrypted and written back.
+- Refuses to fall back to insecure on-disk storage — raises a clear error if
+  Supabase or `TOKEN_ENC_KEY` are not configured.
+- **New `backend/sql/gmail_accounts.sql`** — table + `updated_at` trigger + RLS
+  enabled (service-role-only access).
+- **`agent.py`** — `get_connected_accounts`, `_build_gmail_service`,
+  `_fetch_invoice_emails`, `disconnect_account`, and `_write_to_google_sheet` now
+  resolve credentials via `token_store` instead of local token files. Deleted
+  `connect_new_gmail_account` and all `token_*.json` / `credentials.json` handling.
+
+#### Containerization & Kubernetes
+- Production-grade multi-stage `Dockerfile` + `docker-compose.yml` (runs the app
+  from a sealed container; `docker-compose up --build`).
+- **New `k8s/`** manifests — `deployment.yaml`, `service.yaml`, `kustomization.yaml`,
+  and a `secret.example.yaml` template (placeholders only) for local k3s / Rancher.
+
+#### Security & supply chain hardening
+- Patched CVEs, removed hardcoded secrets, moved `sheet_id` out of `config.json`
+  into the `SHEET_ID` env var.
+- Added CycloneDX SBOM, Opengrep security rules (`rules/`), and a gitleaks config.
+
+- **New dependencies:** `cryptography==44.0.0` (Fernet), `itsdangerous==2.2.0` (signed sessions).
+- **New env vars:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`,
+  `SESSION_SECRET`, `TOKEN_ENC_KEY` (see `backend/.env.example`).
+
+### ✅ Verification
+- `py_compile` + venv imports clean; Fernet encrypt/decrypt round-trip asserted
+  (ciphertext does not leak plaintext).
+- ASGI test: `GET /api/auth/login` → 200 with a real Google consent URL
+  (`access_type=offline`); `GET /api/auth/callback` with a forged `state` → CSRF
+  rejected → `?connect=error`.
+- **gitleaks**: no leaks. **opengrep** (Google-OAuth + Supabase rules): 0 findings.
+
+### ⚠️ Manual steps required before it works in the container
+1. Run `backend/sql/gmail_accounts.sql` against the Supabase project.
+2. In Google Cloud Console, create a **Web application** OAuth client and add
+   `OAUTH_REDIRECT_URI` (e.g. `http://localhost:8000/api/auth/callback`) to the
+   Authorized redirect URIs.
+3. Set `TOKEN_ENC_KEY` (valid Fernet key) and `SESSION_SECRET` in the environment.
+
+---
+
 ## Session 2026-05-25
 
 ---

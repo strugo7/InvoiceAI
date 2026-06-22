@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -9,8 +9,8 @@ from typing import Optional, Dict, Any, List
 
 from contextlib import asynccontextmanager
 
-from agent import GmailInvoiceAgent, get_connected_accounts, disconnect_account, connect_new_gmail_account
-from fastapi.responses import FileResponse
+from agent import GmailInvoiceAgent, get_connected_accounts, disconnect_account
+from fastapi.responses import FileResponse, RedirectResponse
 from report_generator import generate_monthly_pdf, load_invoices_for_month
 from mailer import send_report_email
 from scheduler import start_scheduler, stop_scheduler
@@ -38,6 +38,29 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Signed-cookie session, used to hold the OAuth CSRF `state` between /login and
+# /callback. SESSION_SECRET must be a stable secret in production (otherwise
+# sessions are invalidated on every restart / per worker).
+from starlette.middleware.sessions import SessionMiddleware
+
+_session_secret = os.environ.get("SESSION_SECRET", "").strip()
+if not _session_secret:
+    import secrets as _secrets
+    _session_secret = _secrets.token_urlsafe(32)
+    logging.warning(
+        "SESSION_SECRET not set — using an ephemeral key. OAuth login will not "
+        "survive restarts or scale beyond one worker until you set SESSION_SECRET."
+    )
+# Send the cookie over HTTPS only when the OAuth redirect itself is HTTPS.
+import oauth_flow
+_https_only = oauth_flow.redirect_uri().startswith("https://")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret,
+    same_site="lax",   # allow the cookie on Google's top-level GET redirect back
+    https_only=_https_only,
 )
 
 from dotenv import set_key
@@ -189,22 +212,81 @@ def get_accounts():
     return {"status": "success", "accounts": accounts}
 
 
-@app.post("/api/accounts/connect")
-async def connect_account():
-    """Trigger OAuth flow to connect a new Gmail account."""
+@app.get("/api/auth/login")
+def auth_login(request: Request):
+    """Start the Google OAuth Web flow.
+
+    Builds the Google consent URL, stashes the anti-CSRF `state` in the signed
+    session cookie, and returns the URL for the frontend to redirect the user to.
+    """
+    import token_store
+    if not oauth_flow.is_configured():
+        raise HTTPException(
+            status_code=500,
+            detail="Google OAuth is not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / OAUTH_REDIRECT_URI).",
+        )
+    if not token_store.is_configured():
+        raise HTTPException(
+            status_code=500,
+            detail="Credential storage is not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY / TOKEN_ENC_KEY).",
+        )
+
+    flow = oauth_flow.build_flow()
+    auth_url, state = flow.authorization_url(
+        access_type="offline",     # request a refresh_token
+        prompt="consent",          # force consent so a refresh_token is always returned
+    )
+    request.session["oauth_state"] = state
+    return {"status": "success", "auth_url": auth_url}
+
+
+@app.get("/api/auth/callback")
+def auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """OAuth redirect target: exchange the code for tokens and store them.
+
+    Verifies the `state` against the session (CSRF), exchanges the authorization
+    code, reads the account's email, persists the encrypted credentials, and
+    redirects the user back to the dashboard settings.
+    """
+    import token_store
+    from googleapiclient.discovery import build
+
+    saved_state = request.session.pop("oauth_state", None)
+
+    def _back(status: str) -> RedirectResponse:
+        # 303 so the browser issues a GET to the dashboard after the redirect.
+        return RedirectResponse(url=f"/?connect={status}#settings", status_code=303)
+
+    if error:
+        logging.warning(f"OAuth callback returned error: {error}")
+        return _back("error")
+    if not code or not state or not saved_state or state != saved_state:
+        logging.warning("OAuth callback failed state/code validation (possible CSRF).")
+        return _back("error")
+
     try:
-        email = await connect_new_gmail_account()
-        return {"status": "success", "message": f"Successfully connected account: {email}", "email": email}
-    except FileNotFoundError as fnf_err:
-        raise HTTPException(status_code=400, detail=str(fnf_err))
+        flow = oauth_flow.build_flow(state=saved_state)
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+
+        profile = build("gmail", "v1", credentials=creds).users().getProfile(userId="me").execute()
+        email = profile.get("emailAddress")
+        if not email:
+            logging.error("OAuth callback: could not read email from Gmail profile.")
+            return _back("error")
+
+        token_store.save_credentials(email, creds)
+        logging.info(f"Connected Gmail account via web OAuth: {email}")
+        return _back("success")
     except Exception as e:
-        logging.error(f"OAuth Account connection failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to connect account: {str(e)}")
+        # Never echo the raw exception (may contain token material) to the client.
+        logging.error(f"OAuth token exchange failed: {e}", exc_info=True)
+        return _back("error")
 
 
 @app.delete("/api/accounts/{email}")
 def remove_account(email: str):
-    """Disconnect and delete credentials for a specific account email."""
+    """Disconnect and delete stored credentials for a specific account email."""
     success = disconnect_account(email)
     if success:
         return {"status": "success", "message": f"Successfully disconnected account: {email}"}
