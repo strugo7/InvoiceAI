@@ -1,6 +1,6 @@
 # 🤖 AI Gmail Invoice Tracker & Dashboard (סוכן AI לניהול חשבוניות ודשבורד)
 
-מערכת מבוססת בינה מלאכותית המנטרת את תיבת ה-Gmail שלך, מזהה ומנתחת באופן אוטומטי חשבוניות וקבלות חודשיות באמצעות סוכן **Google Antigravity SDK & Gemini**, שומרת את כל הנתונים ב-**Google Sheets**, ומציגה אותם ב-**Dashboard** יוקרתי ומעוצב בטכנולוגיית Glassmorphism (רקעים חצי-שקופים, צבעי ניאון ואנימציות).
+מערכת מבוססת בינה מלאכותית המנטרת את תיבת ה-Gmail שלך, מזהה ומנתחת באופן אוטומטי חשבוניות וקבלות חודשיות באמצעות **Gemini 2.5 Flash** (SDK רשמי `google-genai`), שומרת את הנתונים ב-**Supabase** ומסנכרנת ל-**Google Sheets**, ומציגה אותם ב-**Dashboard** יוקרתי ומעוצב בטכנולוגיית Glassmorphism (רקעים חצי-שקופים, צבעי ניאון ואנימציות).
 
 המערכת מגיעה עם **מצב סימולציה (Mock Mode) מובנה** שעובד מיידית ללא הגדרות נוספות כדי שתוכל לראות את כל הזרימה, הגרפים והטבלאות מיד בתום ההפעלה!
 
@@ -18,11 +18,10 @@ pip install -r requirements.txt
 ```
 
 > [!NOTE]
-> אם חבילת ה-`google-antigravity` אינה מותקנת עדיין, התקן אותה בעזרת:
-> `pip install google-antigravity`
-> בנוסף, ודא שהגדרת את מפתח ה-API של Gemini במשתנה הסביבה שלך:
-> `export GEMINI_API_KEY="your_api_key_here"`
-> (אם אין לך מפתח עדיין, תוכל לקבל מפתח בחינם כאן: https://aistudio.google.com/app/api-keys)
+> חילוץ הנתונים מתבצע באמצעות **Gemini 2.5 Flash** דרך ה-SDK הרשמי `google-genai`
+> (מותקן מ-`requirements.txt`). ודא שהגדרת מפתח API של Gemini בקובץ `backend/.env`:
+> `GEMINI_API_KEY="your_api_key_here"`
+> (מפתח חינמי ניתן לקבל כאן: https://aistudio.google.com/app/api-keys)
 
 ### 2. הרצת השרת (Run the Server)
 הרצים את שרת ה-FastAPI בתיקיית `backend`:
@@ -63,39 +62,59 @@ SUPABASE_SERVICE_KEY=<service_role key from Supabase dashboard>
 
 ## ⚙️ מעבר למצב אמת (Production Mode)
 
-כדי שהסוכן יסרוק את תיבת ה-Gmail האמיתית שלך ויכתוב לגליון Google Sheets שלך, עקוב אחר הצעדים הבאים:
+כדי שהסוכן יסרוק את תיבת ה-Gmail האמיתית שלך, המערכת משתמשת ב-**OAuth 2.0 Web Application flow**.
+החיבור מתבצע כולו מהדפדפן (ללא קובץ `credentials.json` וללא חלון שנפתח מהשרת), והטוקנים נשמרים
+**מוצפנים ב-Supabase** — לא על הדיסק. כך החיבור עובד גם בתוך קונטיינר / בענן.
 
-### 1. קבלת אישורי גישה מ-Google Cloud Console
-1. היכנס אל [Google Cloud Console](https://console.cloud.google.com/).
-2. צור פרויקט חדש (למשל: `Gmail Invoice Agent`).
-3. תחת **API & Services** -> **Library**, חפש והפעל את:
-   * **Gmail API**
-   * **Google Sheets API**
-4. הגדר את **OAuth Consent Screen** כמצב **External** או **Internal** והוסף את האימייל שלך כמשתמש בדיקה (Test User).
-5. גש ללשונית **Credentials**, לחץ על **Create Credentials** ובחר ב-**OAuth Client ID**.
-6. בחר בסוג יישום **Desktop App**, תן שם (לדוגמה `Invoice Tracker`) ולחץ על Create.
-7. הורד את קובץ ה-JSON שנוצר, שנה את שמו ל-`credentials.json` והנח אותו בתיקיית **`backend/`**.
+### 1. יצירת OAuth Client (סוג Web application) ב-Google Cloud Console
+1. היכנס אל [Google Cloud Console](https://console.cloud.google.com/) וצור/בחר פרויקט.
+2. תחת **APIs & Services → Library**, הפעל את **Gmail API** ו-**Google Sheets API**.
+3. הגדר **OAuth Consent Screen** (External/Internal) והוסף את האימייל שלך כ-Test User.
+4. תחת **Credentials → Create Credentials → OAuth Client ID**, בחר בסוג **Web application**.
+5. תחת **Authorized redirect URIs** הוסף את הכתובת המדויקת של ה-callback, למשל:
+   `http://localhost:8000/api/auth/callback` (חייב להתאים בדיוק ל-`OAUTH_REDIRECT_URI`).
+6. שמור את ה-**Client ID** וה-**Client Secret**.
 
-### 2. יצירת גליון Google Sheet וקישורו
-1. פתח את [Google Sheets](https://sheets.google.com) וצור גיליון חדש.
-2. העתק את ה-Spreadsheet ID מתוך כתובת ה-URL של הגיליון (זו מחרוזת ארוכה של תווים שנמצאת בין `/d/` לבין `/edit` בכתובת).
-3. פתח את הדשבורד בדפדפן, גש ללשונית **"הגדרות סוכן"**:
-   * כבה את **מצב סימולציה**.
-   * הדבק את מזהה הגיליון (Sheet ID) שהעתקת.
-   * לחץ על **שמור הגדרות**.
+### 2. הגדרת משתני סביבה (`backend/.env`)
+ראה דוגמה מלאה ב-[`backend/.env.example`](backend/.env.example). הערכים הנדרשים לחיבור:
+```
+GOOGLE_CLIENT_ID=your_oauth_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your_oauth_client_secret
+OAUTH_REDIRECT_URI=http://localhost:8000/api/auth/callback
+SESSION_SECRET=<python -c "import secrets;print(secrets.token_urlsafe(48))">
+TOKEN_ENC_KEY=<python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())">
+```
+> [!IMPORTANT]
+> `TOKEN_ENC_KEY` מצפין את טוקני ה-OAuth לפני שמירתם ב-Supabase. אם תאבד אותו —
+> כל החשבונות המחוברים יצטרכו חיבור מחדש. שמור אותו כסוד (לא נכנס ל-git).
 
-### 3. הרצה ואישור הרשאה ראשונית
-לחץ על כפתור **"סנכרן כעת"** בדשבורד.
-* ייפתח חלון בדפדפן המבקש ממך להתחבר לחשבון ה-Google שלך ולאשר לסוכן לקרוא מיילים ולכתוב לגיליון (Gmail Readonly ו-Sheets).
-* אשר את הגישה.
-* נוצר קובץ `token.json` בתיקיית `backend` המאפשר סנכרון אוטומטי בעתיד ללא צורך בהתחברות חוזרת!
+### 3. הרצת המיגרציה ב-Supabase
+הרץ פעם אחת את [`backend/sql/gmail_accounts.sql`](backend/sql/gmail_accounts.sql)
+ב-**Supabase → SQL Editor**. הוא יוצר את טבלת `gmail_accounts` (טוקנים מוצפנים) עם RLS.
+
+### 4. חיבור חשבון Gmail וקישור גיליון
+1. גש בדשבורד ללשונית **"הגדרות סוכן"**, כבה **מצב סימולציה**, הדבק את **Sheet ID** ושמור.
+2. לחץ על **"חבר חשבון Gmail"** → תופנה לדף ההסכמה של גוגל → אשר את הגישה → תוחזר
+   לדשבורד והחשבון יופיע כמחובר. הטוקן נשמר מוצפן ב-Supabase ומשמש לסנכרונים הבאים.
+3. לחץ על **"סנכרן כעת"** כדי לסרוק את התיבה.
+
+---
+
+## 🐳 הרצה בקונטיינר (Docker)
+
+```bash
+# מ-root של הפרויקט (דורש backend/.env מאוכלס)
+docker-compose up --build
+# פתח http://localhost:8000
+```
+ה-`Dockerfile` הוא multi-stage ורץ כ-non-root. ראה [`k8s/README.md`](k8s/README.md) להרצה על Kubernetes (k3s / Rancher Desktop).
 
 ---
 
 ## 🛠️ ארכיטקטורת המערכת (Tech Stack)
 
 * **Backend**: FastAPI (Python) - שירות API מהיר ויעיל המטפל בניהול הסנכרון, שמירת ההגדרות והזרמת הנתונים.
-* **AI Agent**: Google Antigravity SDK ומודל Gemini - סוכן בינה מלאכותית חכם המעבד את התוכן של המיילים, מסווג ומחלץ קבלות בעזרת Pydantic Structured Output.
+* **AI Agent**: Gemini 2.5 Flash דרך ה-SDK הרשמי `google-genai` - מעבד את תוכן המיילים, מסווג ומחלץ קבלות בעזרת Pydantic Structured Output.
 * **Frontend**: HTML5 / Vanilla CSS3 / Modern JavaScript (ES6) - ממשק המעוצב בעיצוב **Glassmorphic Dark Mode** מרהיב, הכולל סינון, חיפוש, חלוקת עמודים (Pagination) וחלונות מודאל מפורטים.
 * **Charts**: Chart.js - ספריה להצגת גרפים דינמיים מותאמים אישית (מגמות חודשיות ופילוח קטגוריות).
 * **Database**: **Supabase (PostgreSQL)** — ענן ראשי לאחסון חשבוניות, עם גיבוי מקומי ב-`invoices.json`. Google Sheets נשמר כאפשרות סנכרון נוספת.

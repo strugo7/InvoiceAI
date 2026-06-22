@@ -55,13 +55,25 @@ nerdctl --namespace k8s.io build -t invoiceai-backend:latest .
 kubectl rollout restart deployment/invoiceai-backend
 ```
 
+## Gmail account connection (OAuth)
+
+Account connection no longer needs any files on disk. It uses an **OAuth Web
+flow** (`/api/auth/login` → Google → `/api/auth/callback`) and stores the
+**encrypted** tokens in Supabase (`gmail_accounts` table). To make it work:
+
+- Provide `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`,
+  `SESSION_SECRET`, `TOKEN_ENC_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` via the
+  Secret (created from `backend/.env`, see Deploy step 1).
+- `OAUTH_REDIRECT_URI` must point at how you actually reach the service (e.g. the
+  `port-forward`/Ingress URL + `/api/auth/callback`) and be listed as an Authorized
+  redirect URI on the Google **Web application** OAuth client.
+- Run `backend/sql/gmail_accounts.sql` against the Supabase project once.
+
 ## Known limitations (next steps)
 
-- **Gmail scanning won't work yet.** The app reads `token_*.json` and
-  `credentials.json` from disk (`backend/agent.py`); those are `.dockerignore`d
-  and not in the image. They must be mounted (Secret volume + a writable copy,
-  or a PVC, since the app rewrites refreshed tokens). The dashboard and the
-  cached `invoices.json` still render.
-- **Ephemeral storage.** `invoices.json` and `reports/` live in the container
-  filesystem and reset on restart. Add a PVC if you need them to persist.
-- **Single replica only** — see the scheduler note in `deployment.yaml`.
+- **Ephemeral storage.** `reports/` (and the legacy `invoices.json` backup) live in
+  the container filesystem and reset on restart. Invoices and Gmail credentials
+  persist in Supabase; add a PVC only if you need generated PDFs to survive.
+- **Single replica only** — see the scheduler note in `deployment.yaml`. The signed
+  session used for the OAuth `state` is keyed by `SESSION_SECRET`; multiple replicas
+  are fine for that as long as they share the same `SESSION_SECRET`.
