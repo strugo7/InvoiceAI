@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: invoiceai-backend
+  labels:
+    app.kubernetes.io/name: invoiceai-backend
+    app.kubernetes.io/part-of: invoiceai
+spec:
+  # ClusterIP = internal only. Reach it from your machine with:
+  #   kubectl port-forward svc/invoiceai-backend 8000:8000
+  # Switch to type: LoadBalancer to get a localhost IP via Rancher's ServiceLB,
+  # or add an Ingress (Traefik ships with k3s) for a hostname.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: invoiceai-backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
